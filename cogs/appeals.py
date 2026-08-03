@@ -110,10 +110,14 @@ class Appeals(commands.Cog):
             return await interaction.followup.send(embed=error_embed("You are not currently jailed."), ephemeral=True)
 
         cur2 = await db().execute(
-            "SELECT 1 FROM appeals WHERE case_id = ? AND status = 'pending'", (case["case_id"],)
+            "SELECT 1 FROM appeals WHERE guild_id = ? AND case_id = ? AND status != 'denied'",
+            (interaction.guild.id, case["case_id"]),
         )
         if await cur2.fetchone():
-            return await interaction.followup.send(embed=error_embed("You already have a pending appeal for this case."), ephemeral=True)
+            return await interaction.followup.send(
+                embed=error_embed("You've already submitted an appeal for this case. You may only submit again if it gets declined."),
+                ephemeral=True,
+            )
 
         cfg = await get_guild_config(interaction.guild.id)
         if not cfg["appeal_channel_id"]:
@@ -207,24 +211,6 @@ class Appeals(commands.Cog):
             return await interaction.followup.send(embed=build_embed("Pending Appeals", "There are no pending appeals."))
         lines = [f"Case #{r['case_id']} — <@{r['user_id']}>" for r in rows]
         await interaction.followup.send(embed=build_embed("Pending Appeals", "\n".join(lines)))
-
-    @appeal.command(name="close", description="Close an appeal without approving or denying it.")
-    @app_commands.describe(case_id="The case ID whose appeal should be closed")
-    @trusted_only()
-    async def close(self, interaction: discord.Interaction, case_id: int):
-        await interaction.response.defer()
-        cur = await db().execute(
-            "SELECT * FROM appeals WHERE guild_id = ? AND case_id = ? AND status = 'pending'",
-            (interaction.guild.id, case_id),
-        )
-        row = await cur.fetchone()
-        if row is None:
-            return await interaction.followup.send(embed=error_embed("No pending appeal found for that case."))
-        await db().execute("UPDATE appeals SET status = 'closed', decided_by = ?, decided_at = ? WHERE appeal_id = ?",
-                            (interaction.user.id, now(), row["appeal_id"]))
-        await db().commit()
-        await interaction.followup.send(embed=build_embed("Appeal Closed", f"The appeal for case #{case_id} has been closed."))
-
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(Appeals(bot))
