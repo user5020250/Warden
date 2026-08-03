@@ -6,54 +6,34 @@ behaves the same real-world way: strip roles, apply the jail role, log a
 case, notify the user, and post to the log channel.
 """
 
-import re
 import discord
 
-from database import db, now, get_guild_config, log_action
+from database import db, now, get_guild_config, log_action, next_case_number
 from utils.embeds import build_embed, format_duration
 
-_CELL_NAME_RE = re.compile(r"^cell-(\d+)$")
 
-
-async def open_case(guild_id, user_id, moderator_id, reason, duration_seconds, role_backup_ids, cell_channel_id=None):
-    cur = await db().execute(
+async def open_case(guild_id, case_id, user_id, moderator_id, reason, duration_seconds, role_backup_ids, cell_channel_id=None):
+    await db().execute(
         """INSERT INTO jail_cases
-           (guild_id, user_id, moderator_id, reason, created_at, duration_seconds,
+           (case_id, guild_id, user_id, moderator_id, reason, created_at, duration_seconds,
             remaining_seconds, status, role_backup, cell_channel_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)""",
         (
-            guild_id, user_id, moderator_id, reason, now(), duration_seconds,
+            case_id, guild_id, user_id, moderator_id, reason, now(), duration_seconds,
             duration_seconds, ",".join(str(r) for r in role_backup_ids), cell_channel_id,
         ),
     )
     await db().commit()
-    return cur.lastrowid
-
-
-def _next_cell_number(category: discord.CategoryChannel) -> int:
-    """
-    Picks the lowest available cell number. If Cell #1 was deleted (its
-    occupant served their time) but Cell #2 still exists, the next jailed
-    member gets Cell #1 again instead of Cell #3.
-    """
-    used = set()
-    for channel in category.channels:
-        match = _CELL_NAME_RE.match(channel.name)
-        if match:
-            used.add(int(match.group(1)))
-    n = 1
-    while n in used:
-        n += 1
-    return n
+    return case_id
 
 
 async def _create_cell_channel(
     guild: discord.Guild, category: discord.CategoryChannel, jail_role: discord.Role | None,
-    member: discord.Member, reason: str,
+    member: discord.Member, reason: str, number: int,
 ) -> discord.TextChannel | None:
-    """Creates a private numbered cell channel that only the jailed member (and staff who
-    can already see the category's private channels) can view."""
-    number = _next_cell_number(category)
+    """Creates a private cell channel numbered to match the case ID (so
+    Case #3 lives in cell-3), visible only to the jailed member (and staff who
+    can already see the category's private channels)."""
     overwrites = {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
@@ -107,15 +87,17 @@ async def jail_member(
     except discord.Forbidden:
         return False, "I don't have permission to modify that member's roles.", None
 
-    # Create that member's own private numbered cell channel, reusing the
-    # lowest available number if an earlier cell was deleted on release.
+    # The case ID and the cell channel number are the same value, and both
+    # reuse the lowest number freed up by the last case that closed.
+    case_number = await next_case_number(guild.id)
+
     cell_channel = None
     category = guild.get_channel(cfg["jail_category_id"]) if cfg["jail_category_id"] else None
     if category is not None:
-        cell_channel = await _create_cell_channel(guild, category, jail_role, member, reason)
+        cell_channel = await _create_cell_channel(guild, category, jail_role, member, reason, case_number)
 
     case_id = await open_case(
-        guild.id, member.id, moderator.id, reason, duration_seconds, role_backup_ids,
+        guild.id, case_number, member.id, moderator.id, reason, duration_seconds, role_backup_ids,
         cell_channel_id=cell_channel.id if cell_channel else None,
     )
     await log_action(guild.id, "jail", user_id=member.id, moderator_id=moderator.id,
@@ -179,12 +161,13 @@ async def release_member(
     removes the jail role, closes the case. `method` is one of
     'released', 'pardoned', 'expired', 'forced'.
     """
-    cur = await db().execute("SELECT * FROM jail_cases WHERE case_id = ?", (case_id,))
+    cur = await db().execute(
+        "SELECT * FROM jail_cases WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+        (guild.id, case_id),
+    )
     case = await cur.fetchone()
     if case is None:
-        return False, "That case does not exist."
-    if case["status"] != "active":
-        return False, f"Case #{case_id} is not active (status: {case['status']})."
+        return False, f"Case #{case_id} is not active."
 
     cfg = await get_guild_config(guild.id)
     jail_role = guild.get_role(cfg["jail_role_id"]) if cfg["jail_role_id"] else None
@@ -203,8 +186,8 @@ async def release_member(
             return False, "I don't have permission to modify that member's roles."
 
     await db().execute(
-        "UPDATE jail_cases SET status = ?, released_at = ?, released_by = ? WHERE case_id = ?",
-        (method, now(), moderator.id if moderator else None, case_id),
+        "UPDATE jail_cases SET status = ?, released_at = ?, released_by = ? WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+        (method, now(), moderator.id if moderator else None, guild.id, case_id),
     )
     await db().commit()
     await log_action(guild.id, method, user_id=case["user_id"],
