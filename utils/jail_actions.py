@@ -106,8 +106,8 @@ async def jail_member(
     if cell_channel is not None:
         try:
             await cell_channel.send(embed=build_embed(
-                f"Welcome, {member.display_name}",
-                f"Reason: {reason}\nDuration: {format_duration(duration_seconds)}\nCase ID: #{case_id}\n\n"
+                f"Welcome, **{member.display_name}**",
+                f"**Reason:** {reason}\n**Duration:** {format_duration(duration_seconds)}\n**Case ID:** #{case_id}\n\n"
                 "Only you and staff can see this channel. It will be deleted automatically once your sentence ends.",
             ))
         except discord.Forbidden:
@@ -117,9 +117,9 @@ async def jail_member(
         try:
             cell_line = f"\nCell: {cell_channel.mention}" if cell_channel else ""
             embed = build_embed(
-                "You have been jailed",
-                f"Server: {guild.name}\nReason: {reason}\nDuration: {format_duration(duration_seconds)}\n"
-                f"Case ID: #{case_id}{cell_line}\n\nYou may submit an appeal with /appeal submit.",
+                "**You have been jailed.**",
+                f"**Server:** {guild.name}\n**Reason:** {reason}\n**Duration:** {format_duration(duration_seconds)}\n"
+                f"**Case ID:** `#{case_id}{cell_line}`\n\nYou may submit an appeal with `/appeal` submit.",
             )
             await member.send(embed=embed)
         except discord.Forbidden:
