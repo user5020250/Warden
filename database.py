@@ -38,7 +38,8 @@ async def init_db() -> None:
         );
 
         CREATE TABLE IF NOT EXISTS jail_cases (
-            case_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL,          -- same number as the cell channel; reused
+                                                -- from the lowest free number once a case closes
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             moderator_id INTEGER NOT NULL,
@@ -56,6 +57,13 @@ async def init_db() -> None:
             on_probation INTEGER DEFAULT 0,
             cell_channel_id INTEGER            -- per-user jail cell channel, deleted on release
         );
+
+        -- Only one ACTIVE case may occupy a given case number per guild at a
+        -- time. Once that case closes the number frees up and can be handed
+        -- to the next person jailed, so historical rows are allowed to
+        -- repeat a case_id (they just can't both be active at once).
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jail_cases_active_number
+            ON jail_cases (guild_id, case_id) WHERE status = 'active';
 
         CREATE TABLE IF NOT EXISTS jail_warnings (
             warning_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -165,6 +173,22 @@ async def set_guild_config(guild_id: int, **fields) -> None:
     values = list(fields.values()) + [guild_id]
     await db().execute(f"UPDATE guild_config SET {keys} WHERE guild_id = ?", values)
     await db().commit()
+
+
+async def next_case_number(guild_id: int) -> int:
+    """
+    Picks the lowest case number not currently in use by an active case in
+    this guild. Case numbers double as the jailed member's cell channel
+    number, and both are freed for reuse as soon as that case closes.
+    """
+    cur = await db().execute(
+        "SELECT case_id FROM jail_cases WHERE guild_id = ? AND status = 'active'", (guild_id,)
+    )
+    used = {row["case_id"] for row in await cur.fetchall()}
+    n = 1
+    while n in used:
+        n += 1
+    return n
 
 
 async def log_action(guild_id, action, user_id=None, moderator_id=None, case_id=None, detail=None):
