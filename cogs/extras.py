@@ -6,6 +6,7 @@ from database import db, now
 from utils.embeds import build_embed, error_embed, format_duration
 from utils.permissions import trusted_only
 from utils.jail_actions import release_member
+from utils.duration import parse_duration
 
 
 class Extras(commands.Cog):
@@ -24,10 +25,16 @@ class Extras(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="solitary", description="Place a jailed user in stricter isolation.")
-    @app_commands.describe(member="The jailed member", minutes="Extra time added for the isolation period")
+    @app_commands.describe(member="The jailed member",
+                            duration="Extra time added for the isolation period, e.g. 30s, 10m, 2h, 1d")
     @trusted_only()
-    async def solitary(self, interaction: discord.Interaction, member: discord.Member, minutes: int = 30):
+    async def solitary(self, interaction: discord.Interaction, member: discord.Member, duration: str = "30m"):
         await interaction.response.defer()
+        try:
+            added_seconds = parse_duration(duration)
+        except ValueError as exc:
+            return await interaction.followup.send(embed=error_embed(str(exc)))
+
         cur = await db().execute(
             "SELECT * FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
             (interaction.guild.id, member.id),
@@ -52,23 +59,24 @@ class Extras(commands.Cog):
         if case["duration_seconds"] is not None:
             elapsed = now() - case["created_at"]
             remaining = max(0, case["duration_seconds"] - elapsed)
-            new_duration = elapsed + remaining + minutes * 60
-            await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE case_id = ?",
-                                (new_duration, case["case_id"]))
+            new_duration = elapsed + remaining + added_seconds
+            await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE case_id = ? AND guild_id = ?",
+                                (new_duration, case["case_id"], interaction.guild.id))
             await db().commit()
 
         try:
             await member.send(embed=build_embed(
                 "Solitary Confinement",
                 f"You have been placed in stricter isolation in {interaction.guild.name}. "
-                f"You can no longer send messages, even in the jail cell, and {minutes} minute(s) were added to your sentence."
+                f"You can no longer send messages, even in the jail cell, and {format_duration(added_seconds)} "
+                "were added to your sentence."
             ))
         except discord.Forbidden:
             pass
 
         await interaction.followup.send(embed=build_embed(
             "Solitary Confinement",
-            f"{member.mention} has been placed in solitary confinement. {minutes} minute(s) added to case #{case['case_id']}."
+            f"{member.mention} has been placed in solitary confinement. {format_duration(added_seconds)} added to case #{case['case_id']}."
         ))
 
     @app_commands.command(name="probation", description="Release a jailed user early, with monitoring.")
@@ -101,11 +109,16 @@ class Extras(commands.Cog):
     @app_commands.command(name="visitation", description="Allow temporary access to visit a jailed user's cell.")
     @app_commands.describe(member="The jailed member whose cell is being visited",
                             visitor="The member who may temporarily visit the jail cell",
-                            minutes="How long the visitation access lasts")
+                            duration="How long the visitation access lasts, e.g. 30s, 15m, 2h, 1d")
     @trusted_only()
     async def visitation(self, interaction: discord.Interaction, member: discord.Member,
-                          visitor: discord.Member, minutes: int = 15):
+                          visitor: discord.Member, duration: str = "15m"):
         await interaction.response.defer()
+        try:
+            duration_seconds = parse_duration(duration)
+        except ValueError as exc:
+            return await interaction.followup.send(embed=error_embed(str(exc)))
+
         cur = await db().execute(
             "SELECT * FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
             (interaction.guild.id, member.id),
@@ -127,7 +140,7 @@ class Extras(commands.Cog):
 
         await interaction.followup.send(embed=build_embed(
             "Visitation Granted",
-            f"{visitor.mention} may now access {text_channel.mention} for {minutes} minute(s). "
+            f"{visitor.mention} may now access {text_channel.mention} for {format_duration(duration_seconds)}. "
             "Remove access manually afterward, or reduce with /cell lock if needed. Note: that cell "
             "is deleted automatically when the occupant is released, which also clears this access."
         ))
