@@ -7,15 +7,23 @@ from utils.embeds import build_embed, error_embed
 
 
 class PermissionsCog(commands.Cog):
-    """Exemptions and trusted-moderator management. Grouped under /jailperms."""
+    """
+    Exemptions and trusted-moderator management.
+
+    /jailperms itself now directly shows the current permissions (it used
+    to be a subcommand, /jailperms permissions). Since Discord doesn't
+    allow a command to be both standalone and a group of subcommands, the
+    exempt/trusted management subcommands live under /jailpermsmanage
+    instead (same naming-conflict reason as /jail vs /jailinfo).
+    """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    jailperms = app_commands.Group(name="jailperms", description="Manage jail system permissions.",
-                                    default_permissions=discord.Permissions(administrator=True))
-    exempt = app_commands.Group(name="exempt", parent=jailperms, description="Manage jail exemptions.")
-    trusted = app_commands.Group(name="trusted", parent=jailperms, description="Manage trusted moderators.")
+    jailpermsmanage = app_commands.Group(name="jailpermsmanage", description="Manage jail system permissions.",
+                                          default_permissions=discord.Permissions(administrator=True))
+    exempt = app_commands.Group(name="exempt", parent=jailpermsmanage, description="Manage jail exemptions.")
+    trusted = app_commands.Group(name="trusted", parent=jailpermsmanage, description="Manage trusted moderators.")
 
     @exempt.command(name="add", description="Exempt a role or user from being jailed.")
     @app_commands.describe(target="The role or user to exempt")
@@ -63,8 +71,9 @@ class PermissionsCog(commands.Cog):
             return await interaction.response.send_message(embed=error_embed(f"{member.mention} was not a trusted moderator."))
         await interaction.response.send_message(embed=build_embed("Trusted Moderator Removed", f"{member.mention} no longer has jail command access."))
 
-    @jailperms.command(name="permissions", description="View jail permissions.")
-    async def view_permissions(self, interaction: discord.Interaction):
+    @app_commands.command(name="jailperms", description="View jail permissions.")
+    @app_commands.default_permissions(administrator=True)
+    async def jailperms(self, interaction: discord.Interaction):
         await interaction.response.defer()
         cur = await db().execute("SELECT user_id FROM trusted_moderators WHERE guild_id = ?", (interaction.guild.id,))
         trusted_rows = await cur.fetchall()
