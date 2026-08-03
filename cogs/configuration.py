@@ -45,27 +45,11 @@ class Configuration(commands.Cog):
         await set_guild_config(interaction.guild.id, default_minutes=minutes)
         await interaction.response.send_message(embed=build_embed("Config Updated", f"Default jail duration set to {minutes} minute(s)."))
 
-    @jailconfig.command(name="dm", description="Toggle DM notifications.")
-    @app_commands.describe(enabled="Whether jailed members should be DMed")
-    async def dm(self, interaction: discord.Interaction, enabled: bool):
-        await set_guild_config(interaction.guild.id, dm_notifications=int(enabled))
-        await interaction.response.send_message(embed=build_embed("Config Updated", f"DM notifications {'enabled' if enabled else 'disabled'}."))
-
     @jailconfig.command(name="autorestore", description="Toggle automatic role restoration.")
     @app_commands.describe(enabled="Whether roles should be restored automatically on release")
     async def autorestore(self, interaction: discord.Interaction, enabled: bool):
         await set_guild_config(interaction.guild.id, auto_restore=int(enabled))
         await interaction.response.send_message(embed=build_embed("Config Updated", f"Automatic role restoration {'enabled' if enabled else 'disabled'}."))
-
-    @jailconfig.command(name="voicemode", description="Configure voice behavior for jailed members.")
-    @app_commands.describe(mode="How to treat jailed members who are in voice channels")
-    @app_commands.choices(mode=[
-        app_commands.Choice(name="Do nothing", value="none"),
-        app_commands.Choice(name="Deafen while jailed", value="deafen"),
-    ])
-    async def voicemode(self, interaction: discord.Interaction, mode: app_commands.Choice[str]):
-        await set_guild_config(interaction.guild.id, voice_mode=mode.value)
-        await interaction.response.send_message(embed=build_embed("Config Updated", f"Voice mode set to: {mode.name}."))
 
 
 async def setup(bot: commands.Bot):
