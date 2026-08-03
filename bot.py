@@ -21,7 +21,6 @@ logger = logging.getLogger("jailbot")
 
 INTENTS = discord.Intents.default()
 INTENTS.members = True
-INTENTS.message_content = True  # required for the autojail spam/word filter
 
 COGS = [
     "cogs.setup",
@@ -31,7 +30,6 @@ COGS = [
     "cogs.appeals",
     "cogs.cell",
     "cogs.mod_utils",
-    "cogs.autojail",
     "cogs.statistics",
     "cogs.configuration",
     "cogs.permissions_cog",
