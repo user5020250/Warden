@@ -19,11 +19,11 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
     ],
     "Basic Jail": [
         ("/jail", "Jails a member: strips their current roles (saved for later restoration), applies the jail "
-                   "role, opens a case, and DMs the member. Usage: /jail member reason minutes.", TRUSTED),
-        ("/unjail", "Releases a jailed member and restores their prior roles if auto-restore is on. "
-                     "Usage: /unjail member.", TRUSTED),
-        ("/forceunjail", "Strips the jail role and closes the case even if the case or role backup is missing "
-                          "or broken. Usage: /forceunjail member [case_id].", TRUSTED),
+                   "role, opens a case, and DMs the member. The case ID matches the member's cell channel "
+                   "number, and reuses the lowest free number once a case closes. Usage: /jail member reason "
+                   "duration (e.g. 30s, 10m, 2h, 1d, or permanent — omit for the server default).", TRUSTED),
+        ("/release", "Releases a jailed member and restores their prior roles if auto-restore is on. "
+                      "Usage: /release member.", TRUSTED),
         ("/selfrelease", "Lets the server owner or an administrator release themselves for debugging. "
                           "Usage: /selfrelease.", OWNER),
         ("/jailinfo list", "Lists everyone currently jailed with time remaining. Usage: /jailinfo list.", TRUSTED),
@@ -46,7 +46,6 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
     "Cases": [
         ("/case view", "Shows full details for a case by ID. Usage: /case view case_id.", TRUSTED),
         ("/case editreason", "Changes a case's recorded reason. Usage: /case editreason case_id reason.", TRUSTED),
-        ("/case editduration", "Changes a case's total duration. Usage: /case editduration case_id minutes.", TRUSTED),
         ("/case delete", "Permanently deletes a case record. Usage: /case delete case_id.", ADMIN),
         ("/case evidence", "Attaches evidence (a link or description) to a case. Usage: /case evidence case_id evidence.", TRUSTED),
         ("/case notes", "Adds a private note to a case, visible only to staff. Usage: /case notes case_id note.", TRUSTED),
@@ -55,11 +54,12 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
     ],
     "Appeals": [
         ("/appeal submit", "Files an appeal for your own active case; posts it to the appeal channel with "
-                            "Approve/Decline buttons for staff. Usage: /appeal submit message.", EVERYONE),
+                            "Approve/Decline buttons for staff. You may only have one appeal open per case at "
+                            "a time — you can submit again only after a previous appeal for that case was "
+                            "declined. Usage: /appeal submit message.", EVERYONE),
         ("/appeal view", "Shows the status of your most recent appeal. Usage: /appeal view.", EVERYONE),
         ("/appeal withdraw", "Cancels your own pending appeal. Usage: /appeal withdraw.", EVERYONE),
         ("/appeal list", "Lists all pending appeals in the server. Usage: /appeal list.", TRUSTED),
-        ("/appeal close", "Closes a pending appeal without approving or denying it. Usage: /appeal close case_id.", TRUSTED),
         ("Approve / Decline buttons", "On every appeal embed in the appeal channel; moderators click these "
                                        "instead of using a command to approve (releases the member) or decline "
                                        "(keeps them jailed).", TRUSTED),
@@ -71,24 +71,11 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
         ("/cell slowmode", "Sets slowmode delay (seconds) on a specific member's cell channel. Usage: /cell slowmode member seconds.", TRUSTED),
     ],
     "Moderator Utilities": [
-        ("/jailmod warn", "Formally warns a jailed member and DMs them. Usage: /jailmod warn member reason.", TRUSTED),
-        ("/jailmod mute", "Applies a Discord timeout on top of jail. Usage: /jailmod mute member minutes.", TRUSTED),
-        ("/jailmod nickname", "Changes a jailed member's nickname. Usage: /jailmod nickname member nickname.", TRUSTED),
-        ("/jailmod transfer", "Notes a case as transferred to a different category for record-keeping. "
-                               "Usage: /jailmod transfer member category.", TRUSTED),
+        ("/jailmod mute", "Applies a Discord timeout on top of jail. Usage: /jailmod mute member duration "
+                           "(e.g. 30s, 10m, 2h, 1d).", TRUSTED),
+        ("/jailmod transfer", "Moves a jailed member to a different cell channel you choose, transferring their "
+                               "channel access. Usage: /jailmod transfer member channel.", TRUSTED),
         ("/jailmod notify", "Resends the jail notification DM to a jailed member. Usage: /jailmod notify member.", TRUSTED),
-        ("/jailmod restore", "Manually restores a member's pre-jail roles from the case's role backup. "
-                              "Usage: /jailmod restore member.", TRUSTED),
-    ],
-    "Auto Jail": [
-        ("/autojail enable", "Turns on automatic jailing for message spam and banned words. Usage: /autojail enable.", TRUSTED),
-        ("/autojail disable", "Turns off automatic jailing. Usage: /autojail disable.", TRUSTED),
-        ("/autojail violations", "Sets how many violations in a time window trigger an auto-jail. "
-                                  "Usage: /autojail violations max_violations window_seconds.", TRUSTED),
-        ("/autojail whitelist", "Exempts a role or user from autojail only. Usage: /autojail whitelist target.", TRUSTED),
-        ("/autojail blacklist", "Marks a role or user to be auto-jailed on their very next violation. "
-                                 "Usage: /autojail blacklist target.", TRUSTED),
-        ("/autojail duration", "Sets the sentence length applied by automatic jailing. Usage: /autojail duration minutes.", TRUSTED),
     ],
     "Statistics": [
         ("/jailstats overview", "Shows total cases, active cases, pardons, and unique members jailed. "
@@ -105,17 +92,15 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
         ("/jailconfig appealchannel", "Sets the channel appeals are posted to. Usage: /jailconfig appealchannel channel.", ADMIN),
         ("/jailconfig category", "Sets the category that holds the jail channels. Usage: /jailconfig category category.", ADMIN),
         ("/jailconfig defaulttime", "Sets the default sentence length in minutes. Usage: /jailconfig defaulttime minutes.", ADMIN),
-        ("/jailconfig dm", "Toggles whether jailed members are DMed. Usage: /jailconfig dm enabled.", ADMIN),
         ("/jailconfig autorestore", "Toggles automatic role restoration on release. Usage: /jailconfig autorestore enabled.", ADMIN),
-        ("/jailconfig voicemode", "Sets how jailed members in voice are treated. Usage: /jailconfig voicemode mode.", ADMIN),
     ],
     "Permissions": [
-        ("/jailperms exempt add", "Exempts a role or user from ever being jailed. Usage: /jailperms exempt add target.", ADMIN),
-        ("/jailperms exempt remove", "Removes an exemption. Usage: /jailperms exempt remove target.", ADMIN),
-        ("/jailperms trusted add", "Grants a member jail command access without needing Manage Roles. "
-                                    "Usage: /jailperms trusted add member.", ADMIN),
-        ("/jailperms trusted remove", "Revokes trusted-moderator access. Usage: /jailperms trusted remove member.", ADMIN),
-        ("/jailperms permissions", "Shows the current trusted moderators and exemptions. Usage: /jailperms permissions.", ADMIN),
+        ("/jailperms", "Shows the current trusted moderators and exemptions. Usage: /jailperms.", ADMIN),
+        ("/jailpermsmanage exempt add", "Exempts a role or user from ever being jailed. Usage: /jailpermsmanage exempt add target.", ADMIN),
+        ("/jailpermsmanage exempt remove", "Removes an exemption. Usage: /jailpermsmanage exempt remove target.", ADMIN),
+        ("/jailpermsmanage trusted add", "Grants a member jail command access without needing Manage Roles. "
+                                          "Usage: /jailpermsmanage trusted add member.", ADMIN),
+        ("/jailpermsmanage trusted remove", "Revokes trusted-moderator access. Usage: /jailpermsmanage trusted remove member.", ADMIN),
     ],
     "Logging": [
         ("/logs jail", "Shows the fifteen most recent jail log entries. Usage: /logs jail.", TRUSTED),
@@ -125,11 +110,11 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
     ],
     "Situational Commands": [
         ("/solitary", "Places a jailed member in stricter isolation, blocking messages even in the jail cell and "
-                       "adding extra time. Usage: /solitary member minutes.", TRUSTED),
+                       "adding extra time. Usage: /solitary member duration (e.g. 30s, 10m, 2h, 1d).", TRUSTED),
         ("/probation", "Releases a jailed member early, flags the case for monitoring, and restores roles. "
                         "Usage: /probation member reason.", TRUSTED),
         ("/visitation", "Temporarily grants a non-jailed member access to view and post in the jail cell. "
-                         "Usage: /visitation visitor minutes.", TRUSTED),
+                         "Usage: /visitation member visitor duration (e.g. 30s, 15m, 2h, 1d).", TRUSTED),
         ("/cellmate", "Jails a second member into the same case context as an already-jailed member, matching "
                        "their remaining sentence. Usage: /cellmate member cellmate.", TRUSTED),
     ],
