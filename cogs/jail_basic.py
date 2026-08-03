@@ -6,6 +6,7 @@ from database import db, now, get_guild_config
 from utils.embeds import build_embed, error_embed, format_duration
 from utils.permissions import trusted_only, is_exempt
 from utils.jail_actions import jail_member, release_member
+from utils.duration import parse_duration
 
 
 class JailBasic(commands.Cog):
@@ -28,10 +29,11 @@ class JailBasic(commands.Cog):
     # ------------------------------------------------------------------
     @app_commands.command(name="jail", description="Jail a member.")
     @app_commands.describe(member="The member to jail", reason="Why they are being jailed",
-                           minutes="Sentence length in minutes (omit for the server default, 0 for permanent)")
+                           duration="How long to jail for, e.g. 30s, 10m, 2h, 1d, or permanent "
+                                     "(omit for the server default)")
     @trusted_only()
     async def jail(self, interaction: discord.Interaction, member: discord.Member,
-                    reason: str = "No reason provided", minutes: int | None = None):
+                    reason: str = "No reason provided", duration: str | None = None):
         await interaction.response.defer()
 
         if member.id == interaction.user.id:
@@ -44,12 +46,13 @@ class JailBasic(commands.Cog):
             return await interaction.followup.send(embed=error_embed("You cannot jail someone with an equal or higher role."))
 
         cfg = await get_guild_config(interaction.guild.id)
-        if minutes is None:
+        if duration is None:
             duration_seconds = cfg["default_minutes"] * 60
-        elif minutes == 0:
-            duration_seconds = None  # permanent
         else:
-            duration_seconds = minutes * 60
+            try:
+                duration_seconds = parse_duration(duration, allow_permanent=True)
+            except ValueError as exc:
+                return await interaction.followup.send(embed=error_embed(str(exc)))
 
         success, message, case_id = await jail_member(
             interaction.guild, member, interaction.user, reason, duration_seconds, self.bot
@@ -58,12 +61,12 @@ class JailBasic(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     # ------------------------------------------------------------------
-    # /unjail
+    # /release
     # ------------------------------------------------------------------
-    @app_commands.command(name="unjail", description="Release a member.")
+    @app_commands.command(name="release", description="Release a member.")
     @app_commands.describe(member="The jailed member to release")
     @trusted_only()
-    async def unjail(self, interaction: discord.Interaction, member: discord.Member):
+    async def release(self, interaction: discord.Interaction, member: discord.Member):
         await interaction.response.defer()
         cur = await db().execute(
             "SELECT case_id FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active'"
@@ -76,47 +79,7 @@ class JailBasic(commands.Cog):
         success, message = await release_member(
             interaction.guild, member, interaction.user, row["case_id"], "released", self.bot
         )
-        await interaction.followup.send(embed=build_embed("Unjail", message) if success else error_embed(message))
-
-    # ------------------------------------------------------------------
-    # /forceunjail
-    # ------------------------------------------------------------------
-    @app_commands.command(name="forceunjail", description="Force release even if role backup is missing.")
-    @app_commands.describe(member="The member to force-release", case_id="Specific case ID, if known")
-    @trusted_only()
-    async def forceunjail(self, interaction: discord.Interaction, member: discord.Member, case_id: int | None = None):
-        await interaction.response.defer()
-        cfg = await get_guild_config(interaction.guild.id)
-        jail_role = interaction.guild.get_role(cfg["jail_role_id"]) if cfg["jail_role_id"] else None
-
-        if case_id is None:
-            cur = await db().execute(
-                "SELECT case_id FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active'"
-                " ORDER BY created_at DESC LIMIT 1",
-                (interaction.guild.id, member.id),
-            )
-            row = await cur.fetchone()
-            case_id = row["case_id"] if row else None
-
-        # Strip the jail role no matter what the case/role backup situation is
-        if jail_role and jail_role in member.roles:
-            try:
-                await member.remove_roles(jail_role, reason=f"Force-released by {interaction.user}")
-            except discord.Forbidden:
-                return await interaction.followup.send(embed=error_embed("I don't have permission to modify that member's roles."))
-
-        if case_id is not None:
-            await db().execute(
-                "UPDATE jail_cases SET status = 'released', released_at = ?, released_by = ?"
-                " WHERE case_id = ? AND status = 'active'",
-                (now(), interaction.user.id, case_id),
-            )
-            await db().commit()
-
-        await interaction.followup.send(embed=build_embed(
-            "Force Unjail", f"{member.mention} has been force-released" +
-            (f" (case #{case_id})." if case_id else ", no matching case was found.")
-        ))
+        await interaction.followup.send(embed=build_embed("Release", message) if success else error_embed(message))
 
     # ------------------------------------------------------------------
     # /selfrelease - owner only / debug
@@ -217,8 +180,9 @@ class JailBasic(commands.Cog):
                                member: discord.Member | None = None, case_id: int | None = None):
         await interaction.response.defer()
         if case_id is not None:
-            cur = await db().execute("SELECT * FROM jail_cases WHERE guild_id = ? AND case_id = ?",
-                                      (interaction.guild.id, case_id))
+            cur = await db().execute(
+                "SELECT * FROM jail_cases WHERE guild_id = ? AND case_id = ? ORDER BY created_at DESC LIMIT 15",
+                (interaction.guild.id, case_id))
         elif member is not None:
             cur = await db().execute(
                 "SELECT * FROM jail_cases WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 15",
