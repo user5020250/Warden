@@ -6,90 +6,214 @@ from database import db
 from utils.embeds import build_embed, error_embed
 
 
+# ----------------------------------------------------------------------
+# /jailmanage exempt - Add/Remove buttons, each opens a user search select
+# ----------------------------------------------------------------------
+class ExemptAddSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="Search for a user to exempt", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        await db().execute(
+            "INSERT OR IGNORE INTO exempt_entries (guild_id, entity_id, entity_type) VALUES (?, ?, 'user')",
+            (interaction.guild.id, target.id),
+        )
+        await db().commit()
+        await interaction.response.send_message(
+            embed=build_embed("Exemption Added", f"{target.mention} can no longer be jailed."), ephemeral=True)
+
+
+class ExemptRemoveSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="Search for a user to remove exemption from", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        result = await db().execute(
+            "DELETE FROM exempt_entries WHERE guild_id = ? AND entity_id = ? AND entity_type = 'user'",
+            (interaction.guild.id, target.id),
+        )
+        await db().commit()
+        if result.rowcount == 0:
+            return await interaction.response.send_message(
+                embed=error_embed(f"{target.mention} was not exempt."), ephemeral=True)
+        await interaction.response.send_message(
+            embed=build_embed("Exemption Removed", f"{target.mention} can be jailed again."), ephemeral=True)
+
+
+class ExemptAddView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(ExemptAddSelect())
+
+
+class ExemptRemoveView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(ExemptRemoveSelect())
+
+
+class ExemptManageView(discord.ui.View):
+    """Posted by /jailmanage exempt — Add / Remove buttons, each opens a user-search select."""
+
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Add", style=discord.ButtonStyle.success)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=build_embed("Add Exemption", "Search for the user to exempt from ever being jailed."),
+            view=ExemptAddView(), ephemeral=True)
+
+    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger)
+    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=build_embed("Remove Exemption", "Search for the user to remove the exemption from."),
+            view=ExemptRemoveView(), ephemeral=True)
+
+
+# ----------------------------------------------------------------------
+# /jailmanage trusted - Add/Remove buttons, each opens a user search select
+# ----------------------------------------------------------------------
+class TrustedAddSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="Search for a user to grant jail command access", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        await db().execute(
+            "INSERT OR IGNORE INTO trusted_moderators (guild_id, user_id) VALUES (?, ?)",
+            (interaction.guild.id, target.id),
+        )
+        await db().commit()
+        await interaction.response.send_message(
+            embed=build_embed("Trusted Moderator Added", f"{target.mention} can now use jail commands."),
+            ephemeral=True)
+
+
+class TrustedRemoveSelect(discord.ui.UserSelect):
+    def __init__(self):
+        super().__init__(placeholder="Search for a user to revoke jail command access", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        result = await db().execute(
+            "DELETE FROM trusted_moderators WHERE guild_id = ? AND user_id = ?",
+            (interaction.guild.id, target.id),
+        )
+        await db().commit()
+        if result.rowcount == 0:
+            return await interaction.response.send_message(
+                embed=error_embed(f"{target.mention} was not a trusted moderator."), ephemeral=True)
+        await interaction.response.send_message(
+            embed=build_embed("Trusted Moderator Removed", f"{target.mention} no longer has jail command access."),
+            ephemeral=True)
+
+
+class TrustedAddView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(TrustedAddSelect())
+
+
+class TrustedRemoveView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(TrustedRemoveSelect())
+
+
+class TrustedManageView(discord.ui.View):
+    """Posted by /jailmanage trusted — Add / Remove buttons, each opens a user-search select."""
+
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @discord.ui.button(label="Add", style=discord.ButtonStyle.success)
+    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=build_embed("Add Trusted Moderator", "Search for the member to grant jail command access to."),
+            view=TrustedAddView(), ephemeral=True)
+
+    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger)
+    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=build_embed("Remove Trusted Moderator", "Search for the member to revoke jail command access from."),
+            view=TrustedRemoveView(), ephemeral=True)
+
+
+# ----------------------------------------------------------------------
+# /jailperms - dropdown: Trusted Moderators / Exempt Roles & Users
+# ----------------------------------------------------------------------
+class JailPermsSelect(discord.ui.Select):
+    def __init__(self):
+        options = [
+            discord.SelectOption(label="Trusted Moderators", value="trusted",
+                                  description="Members granted jail command access."),
+            discord.SelectOption(label="Exempt Roles & Users", value="exempt",
+                                  description="Roles/users who can never be jailed."),
+        ]
+        super().__init__(placeholder="Choose what to view", options=options, custom_id="jailperms_select")
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        if self.values[0] == "trusted":
+            cur = await db().execute("SELECT user_id FROM trusted_moderators WHERE guild_id = ?", (interaction.guild.id,))
+            rows = await cur.fetchall()
+            text = "\n".join(f"<@{r['user_id']}>" for r in rows) or "None"
+            embed = build_embed("Trusted Moderators", text, fields=[
+                ("Note", "Members with Manage Roles, Moderate Members, Administrator, or who own the server "
+                         "can always use jail commands even if not listed above.", False),
+            ])
+        else:
+            cur = await db().execute("SELECT entity_id, entity_type FROM exempt_entries WHERE guild_id = ?", (interaction.guild.id,))
+            rows = await cur.fetchall()
+            text = "\n".join(
+                f"<@&{r['entity_id']}>" if r["entity_type"] == "role" else f"<@{r['entity_id']}>" for r in rows
+            ) or "None"
+            embed = build_embed("Exempt Roles & Users", text)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+class JailPermsView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(JailPermsSelect())
+
+
 class PermissionsCog(commands.Cog):
     """
     Exemptions and trusted-moderator management.
 
-    /jailperms itself now directly shows the current permissions (it used
-    to be a subcommand, /jailperms permissions). Since Discord doesn't
-    allow a command to be both standalone and a group of subcommands, the
-    exempt/trusted management subcommands live under /jailpermsmanage
-    instead (same naming-conflict reason as /jail vs /jailinfo).
+    /jailperms shows a dropdown to browse trusted moderators or exemptions.
+    /jailmanage exempt and /jailmanage trusted each post an embed with
+    Add/Remove buttons; each button opens a user-search select (UserSelect)
+    instead of taking a slash-command parameter directly.
     """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    jailpermsmanage = app_commands.Group(name="jailpermsmanage", description="Manage jail system permissions.",
-                                          default_permissions=discord.Permissions(administrator=True))
-    exempt = app_commands.Group(name="exempt", parent=jailpermsmanage, description="Manage jail exemptions.")
-    trusted = app_commands.Group(name="trusted", parent=jailpermsmanage, description="Manage trusted moderators.")
+    jailmanage = app_commands.Group(name="jailmanage", description="Manage jail system permissions.",
+                                     default_permissions=discord.Permissions(administrator=True))
 
-    @exempt.command(name="add", description="Exempt a role or user from being jailed.")
-    @app_commands.describe(target="The role or user to exempt")
-    async def exempt_add(self, interaction: discord.Interaction, target: discord.Role | discord.Member):
-        entity_type = "role" if isinstance(target, discord.Role) else "user"
-        await db().execute(
-            "INSERT OR IGNORE INTO exempt_entries (guild_id, entity_id, entity_type) VALUES (?, ?, ?)",
-            (interaction.guild.id, target.id, entity_type),
-        )
-        await db().commit()
-        await interaction.response.send_message(embed=build_embed("Exemption Added", f"{target.mention} can no longer be jailed."))
+    @jailmanage.command(name="exempt", description="Exempt or un-exempt a user from ever being jailed.")
+    async def jailmanage_exempt(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            embed=build_embed("Manage Exemptions", "Add or remove a user's exemption from jailing."),
+            view=ExemptManageView())
 
-    @exempt.command(name="remove", description="Remove exemption.")
-    @app_commands.describe(target="The role or user to remove exemption from")
-    async def exempt_remove(self, interaction: discord.Interaction, target: discord.Role | discord.Member):
-        entity_type = "role" if isinstance(target, discord.Role) else "user"
-        result = await db().execute(
-            "DELETE FROM exempt_entries WHERE guild_id = ? AND entity_id = ? AND entity_type = ?",
-            (interaction.guild.id, target.id, entity_type),
-        )
-        await db().commit()
-        if result.rowcount == 0:
-            return await interaction.response.send_message(embed=error_embed(f"{target.mention} was not exempt."))
-        await interaction.response.send_message(embed=build_embed("Exemption Removed", f"{target.mention} can be jailed again."))
-
-    @trusted.command(name="add", description="Add trusted moderator.")
-    @app_commands.describe(member="The member to trust with jail commands")
-    async def trusted_add(self, interaction: discord.Interaction, member: discord.Member):
-        await db().execute(
-            "INSERT OR IGNORE INTO trusted_moderators (guild_id, user_id) VALUES (?, ?)",
-            (interaction.guild.id, member.id),
-        )
-        await db().commit()
-        await interaction.response.send_message(embed=build_embed("Trusted Moderator Added", f"{member.mention} can now use jail commands."))
-
-    @trusted.command(name="remove", description="Remove trusted moderator.")
-    @app_commands.describe(member="The member to remove from the trusted list")
-    async def trusted_remove(self, interaction: discord.Interaction, member: discord.Member):
-        result = await db().execute(
-            "DELETE FROM trusted_moderators WHERE guild_id = ? AND user_id = ?",
-            (interaction.guild.id, member.id),
-        )
-        await db().commit()
-        if result.rowcount == 0:
-            return await interaction.response.send_message(embed=error_embed(f"{member.mention} was not a trusted moderator."))
-        await interaction.response.send_message(embed=build_embed("Trusted Moderator Removed", f"{member.mention} no longer has jail command access."))
+    @jailmanage.command(name="trusted", description="Grant or revoke jail command access for a member.")
+    async def jailmanage_trusted(self, interaction: discord.Interaction):
+        await interaction.response.send_message(
+            embed=build_embed("Manage Trusted Moderators", "Add or remove a member's trusted-moderator access."),
+            view=TrustedManageView())
 
     @app_commands.command(name="jailperms", description="View jail permissions.")
     @app_commands.default_permissions(administrator=True)
     async def jailperms(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        cur = await db().execute("SELECT user_id FROM trusted_moderators WHERE guild_id = ?", (interaction.guild.id,))
-        trusted_rows = await cur.fetchall()
-        cur = await db().execute("SELECT entity_id, entity_type FROM exempt_entries WHERE guild_id = ?", (interaction.guild.id,))
-        exempt_rows = await cur.fetchall()
-        trusted_text = "\n".join(f"<@{r['user_id']}>" for r in trusted_rows) or "None"
-        exempt_text = "\n".join(
-            f"<@&{r['entity_id']}>" if r["entity_type"] == "role" else f"<@{r['entity_id']}>" for r in exempt_rows
-        ) or "None"
-        embed = build_embed("Jail Permissions", None, fields=[
-            ("Trusted Moderators", trusted_text, False),
-            ("Exempt Roles/Users", exempt_text, False),
-            ("Note", "Members with Manage Roles, Moderate Members, Administrator, or who own the server "
-                     "can always use jail commands even if not listed above.", False),
-        ])
-        await interaction.followup.send(embed=embed)
+        embed = build_embed("Jail Permissions", "Choose what you'd like to view below.")
+        await interaction.response.send_message(embed=embed, view=JailPermsView())
 
 
 async def setup(bot: commands.Bot):
