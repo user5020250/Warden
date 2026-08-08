@@ -131,10 +131,16 @@ class Sentence(commands.Cog):
     action; each button opens a modal asking for a duration string.
     /sentence pardon and /sentence freeze/resume have been removed per
     spec; "permanent" is reachable through Set Time.
+
+    /view sentence is a separate top-level group ("view") open to everyone
+    (no trusted_only check) — it lets a jailed member look up their own
+    case reason, time remaining, and case id without needing mod access.
     """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+
+    view = app_commands.Group(name="view", description="View your own info.")
 
     @app_commands.command(name="sentence", description="Manage an active jail sentence.")
     @app_commands.describe(member="The jailed member")
@@ -156,6 +162,26 @@ class Sentence(commands.Cog):
             ],
         )
         await interaction.response.send_message(embed=embed, view=SentenceView(member, self.bot))
+
+    @view.command(name="sentence", description="View your own current jail sentence: reason, duration, case id.")
+    async def view_sentence(self, interaction: discord.Interaction):
+        case = await _active_case(interaction.guild.id, interaction.user.id)
+        if case is None:
+            return await interaction.response.send_message(
+                embed=error_embed("You are not currently jailed."), ephemeral=True)
+        remaining = None
+        if case["duration_seconds"] is not None:
+            remaining = max(0, case["duration_seconds"] - (now() - case["created_at"]))
+        embed = build_embed(
+            "Your Sentence",
+            None,
+            fields=[
+                ("Case ID", f"#{case['case_id']}", True),
+                ("Time Remaining", format_duration(remaining), True),
+                ("Reason", case["reason"] or "No reason provided", False),
+            ],
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot: commands.Bot):
