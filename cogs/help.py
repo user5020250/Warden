@@ -7,7 +7,6 @@ from utils.embeds import build_embed
 TRUSTED = "Trusted Moderator (Manage Roles / Moderate Members / Administrator / trusted list)"
 ADMIN = "Administrator"
 EVERYONE = "Everyone"
-OWNER = "Server Owner or Administrator"
 
 # Static command reference. Kept separate from the live command tree so the
 # descriptions here can include the exact permission model in plain English.
@@ -21,36 +20,17 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
         ("/jail", "Jails a member: strips their current roles (saved for later restoration), applies the jail "
                    "role, opens a case, and DMs the member. The case ID matches the member's cell channel "
                    "number, and reuses the lowest free number once a case closes. Usage: /jail member reason "
-                   "duration (e.g. 30s, 10m, 2h, 1d, or permanent — omit for the server default).", TRUSTED),
+                   "duration (e.g. 30s, 10m, 2hr, 1d, or permanent — omit for the server default).", TRUSTED),
         ("/release", "Releases a jailed member and restores their prior roles if auto-restore is on. "
-                      "Usage: /release member.", TRUSTED),
-        ("/selfrelease", "Lets the server owner or an administrator release themselves for debugging. "
-                          "Usage: /selfrelease.", OWNER),
-        ("/jailinfo list", "Lists everyone currently jailed with time remaining. Usage: /jailinfo list.", TRUSTED),
-        ("/jailinfo info", "Shows the active case details for one member. Usage: /jailinfo info member.", TRUSTED),
-        ("/jailinfo history", "Shows a member's full jail case history. Usage: /jailinfo history member.", TRUSTED),
-        ("/jailinfo search", "Searches cases by member or case ID. Usage: /jailinfo search [member] [case_id].", TRUSTED),
+                      "Usage: /release member reason.", TRUSTED),
+        ("/jailinfo", "Opens a dropdown to browse jail records: List shows everyone currently jailed "
+                       "(member, time remaining, reason, evidence, case ID); History lets you pick a member "
+                       "and shows their complete jail case history. Usage: /jailinfo.", TRUSTED),
     ],
     "Sentence Management": [
-        ("/sentence extend", "Adds minutes to an active sentence. Usage: /sentence extend member minutes.", TRUSTED),
-        ("/sentence reduce", "Removes minutes from an active sentence; releases the member if it hits zero. "
-                              "Usage: /sentence reduce member minutes.", TRUSTED),
-        ("/sentence settime", "Overwrites the remaining sentence with a new total. Usage: /sentence settime member minutes.", TRUSTED),
-        ("/sentence permanent", "Converts an active sentence to permanent (manual release only). "
-                                 "Usage: /sentence permanent member.", TRUSTED),
-        ("/sentence pardon", "Fully forgives and closes an active sentence. Usage: /sentence pardon member.", TRUSTED),
-        ("/sentence freeze", "Pauses the countdown on an active sentence. Usage: /sentence freeze member.", TRUSTED),
-        ("/sentence resume", "Resumes a frozen sentence's countdown. Usage: /sentence resume member.", TRUSTED),
-        ("/sentence restart", "Restarts the current sentence's timer from the beginning. Usage: /sentence restart member.", TRUSTED),
-    ],
-    "Cases": [
-        ("/case view", "Shows full details for a case by ID. Usage: /case view case_id.", TRUSTED),
-        ("/case editreason", "Changes a case's recorded reason. Usage: /case editreason case_id reason.", TRUSTED),
-        ("/case delete", "Permanently deletes a case record. Usage: /case delete case_id.", ADMIN),
-        ("/case evidence", "Attaches evidence (a link or description) to a case. Usage: /case evidence case_id evidence.", TRUSTED),
-        ("/case notes", "Adds a private note to a case, visible only to staff. Usage: /case notes case_id note.", TRUSTED),
-        ("/case reopen", "Reopens a closed case and re-jails the member if they're still in the server. "
-                          "Usage: /case reopen case_id.", TRUSTED),
+        ("/sentence", "Opens an embed with buttons for an active sentence — Extend, Reduce, and Set Time — "
+                       "each opens a popup asking for a duration (e.g. 30s, 10m, 2hr, 1d; Set Time also accepts "
+                       "'permanent'). Reduce releases the member if it reaches zero. Usage: /sentence member.", TRUSTED),
     ],
     "Appeals": [
         ("/appeal submit", "Files an appeal for your own active case; posts it to the appeal channel with "
@@ -67,15 +47,17 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
     "Jail Cell": [
         ("/cell lock", "Stops a specific jailed member from sending messages in their own cell channel. Usage: /cell lock member.", TRUSTED),
         ("/cell unlock", "Allows a specific jailed member to send messages in their own cell channel again. Usage: /cell unlock member.", TRUSTED),
-        ("/cell announce", "Posts an announcement embed in a specific member's cell channel. Usage: /cell announce member message.", TRUSTED),
         ("/cell slowmode", "Sets slowmode delay (seconds) on a specific member's cell channel. Usage: /cell slowmode member seconds.", TRUSTED),
     ],
     "Moderator Utilities": [
-        ("/jailmod mute", "Applies a Discord timeout on top of jail. Usage: /jailmod mute member duration "
-                           "(e.g. 30s, 10m, 2h, 1d).", TRUSTED),
         ("/jailmod transfer", "Moves a jailed member to a different cell channel you choose, transferring their "
-                               "channel access. Usage: /jailmod transfer member channel.", TRUSTED),
+                               "channel access. Usage: /jailmod transfer member channel. (This lives under "
+                               "/jailmod rather than /jail — Discord doesn't allow /jail to be both a direct "
+                               "command and a subcommand group.)", TRUSTED),
         ("/jailmod notify", "Resends the jail notification DM to a jailed member. Usage: /jailmod notify member.", TRUSTED),
+        ("/jailmod history", "Paginated (5 per page, with Previous/Next/Close buttons) view of every member "
+                              "who's ever had a case: total cases, time served, last reason, and whether they're "
+                              "currently active, sorted by most jailed. Usage: /jailmod history.", TRUSTED),
     ],
     "Statistics": [
         ("/jailstats overview", "Shows total cases, active cases, pardons, and unique members jailed. "
@@ -91,7 +73,8 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
         ("/jailconfig logchannel", "Sets the channel jail actions are logged to. Usage: /jailconfig logchannel channel.", ADMIN),
         ("/jailconfig appealchannel", "Sets the channel appeals are posted to. Usage: /jailconfig appealchannel channel.", ADMIN),
         ("/jailconfig category", "Sets the category that holds the jail channels. Usage: /jailconfig category category.", ADMIN),
-        ("/jailconfig defaulttime", "Sets the default sentence length in minutes. Usage: /jailconfig defaulttime minutes.", ADMIN),
+        ("/jailconfig defaulttime", "Sets the default sentence duration. Usage: /jailconfig defaulttime duration "
+                                     "(e.g. 30s, 10m, 2hr, 1d).", ADMIN),
         ("/jailconfig autorestore", "Toggles automatic role restoration on release. Usage: /jailconfig autorestore enabled.", ADMIN),
     ],
     "Permissions": [
@@ -110,11 +93,11 @@ CATEGORIES: dict[str, list[tuple[str, str, str]]] = {
     ],
     "Situational Commands": [
         ("/solitary", "Places a jailed member in stricter isolation, blocking messages even in the jail cell and "
-                       "adding extra time. Usage: /solitary member duration (e.g. 30s, 10m, 2h, 1d).", TRUSTED),
+                       "adding extra time. Usage: /solitary member duration (e.g. 30s, 10m, 2hr, 1d).", TRUSTED),
         ("/probation", "Releases a jailed member early, flags the case for monitoring, and restores roles. "
                         "Usage: /probation member reason.", TRUSTED),
-        ("/visitation", "Temporarily grants a non-jailed member access to view and post in the jail cell. "
-                         "Usage: /visitation member visitor duration (e.g. 30s, 15m, 2h, 1d).", TRUSTED),
+        ("/visitation", "Temporarily grants a non-jailed member access to view and post in a jail cell. "
+                         "Usage: /visitation member channel duration (e.g. 30s, 15m, 2hr, 1d).", TRUSTED),
         ("/cellmate", "Jails a second member into the same case context as an already-jailed member, matching "
                        "their remaining sentence. Usage: /cellmate member cellmate.", TRUSTED),
     ],
