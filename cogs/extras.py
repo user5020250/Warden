@@ -106,41 +106,28 @@ class Extras(commands.Cog):
             "offense (consider /sentence extend or /solitary)."
         ) if success else error_embed(message))
 
-    @app_commands.command(name="visitation", description="Allow temporary access to visit a jailed user's cell.")
-    @app_commands.describe(member="The jailed member whose cell is being visited",
-                            visitor="The member who may temporarily visit the jail cell",
-                            duration="How long the visitation access lasts, e.g. 30s, 15m, 2h, 1d")
+    @app_commands.command(name="visitation", description="Temporarily grant a non-jailed member access to a jail cell.")
+    @app_commands.describe(member="The non-jailed member who may visit",
+                            channel="The jail cell channel to grant access to",
+                            duration="How long the visitation access lasts, e.g. 30s, 15m, 2hr, 1d")
     @trusted_only()
     async def visitation(self, interaction: discord.Interaction, member: discord.Member,
-                          visitor: discord.Member, duration: str = "15m"):
+                          channel: discord.TextChannel, duration: str = "15m"):
         await interaction.response.defer()
         try:
             duration_seconds = parse_duration(duration)
         except ValueError as exc:
             return await interaction.followup.send(embed=error_embed(str(exc)))
 
-        cur = await db().execute(
-            "SELECT * FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
-            (interaction.guild.id, member.id),
-        )
-        case = await cur.fetchone()
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        if not case["cell_channel_id"]:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} doesn't have a cell channel."))
-        text_channel = interaction.guild.get_channel(case["cell_channel_id"])
-        if text_channel is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention}'s cell channel no longer exists."))
-
         try:
-            await text_channel.set_permissions(visitor, view_channel=True, send_messages=True,
-                                                reason=f"Visitation granted by {interaction.user}")
+            await channel.set_permissions(member, view_channel=True, send_messages=True,
+                                           reason=f"Visitation granted by {interaction.user}")
         except discord.Forbidden:
             return await interaction.followup.send(embed=error_embed("I don't have permission to modify that channel."))
 
         await interaction.followup.send(embed=build_embed(
             "Visitation Granted",
-            f"{visitor.mention} may now access {text_channel.mention} for {format_duration(duration_seconds)}. "
+            f"{member.mention} may now access {channel.mention} for {format_duration(duration_seconds)}. "
             "Remove access manually afterward, or reduce with /cell lock if needed. Note: that cell "
             "is deleted automatically when the occupant is released, which also clears this access."
         ))
