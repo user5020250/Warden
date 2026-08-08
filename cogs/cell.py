@@ -30,8 +30,8 @@ class Cell(commands.Cog):
     Jail cell channel controls. Each jailed member has their own private
     cell channel (created by /jail, deleted automatically on release), so
     these commands take the member whose cell you want to act on.
-    /cell clean and /cell purge have been removed per spec, and no jail
-    voice-channel commands are included.
+    /cell clean, /cell purge, and /cell announce have been removed per
+    spec, and no jail voice-channel commands are included.
     """
 
     def __init__(self, bot: commands.Bot):
@@ -68,20 +68,6 @@ class Cell(commands.Cog):
         overwrite.send_messages = True
         await channel.set_permissions(member, overwrite=overwrite, reason=f"Cell unlocked by {interaction.user}")
         await interaction.followup.send(embed=build_embed("Jail Cell Unlocked", f"{member.mention} can send messages in {channel.mention} again."))
-
-    @cell.command(name="announce", description="Send an announcement in a member's jail cell.")
-    @app_commands.describe(member="The jailed member whose cell should receive the announcement",
-                            message="The announcement to post")
-    @trusted_only()
-    async def announce(self, interaction: discord.Interaction, member: discord.Member, message: str):
-        await interaction.response.defer()
-        channel, err = await _get_cell_channel(interaction.guild, member)
-        if err == "not_jailed":
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        if err == "no_cell" or channel is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} doesn't have a cell channel."))
-        await channel.send(embed=build_embed("Announcement", message))
-        await interaction.followup.send(embed=build_embed("Announcement Sent", f"Posted in {channel.mention}."))
 
     @cell.command(name="slowmode", description="Set slowmode in a member's jail cell.")
     @app_commands.describe(member="The jailed member whose cell should be updated",
