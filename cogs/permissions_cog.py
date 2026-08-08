@@ -42,35 +42,96 @@ class ExemptRemoveSelect(discord.ui.UserSelect):
             embed=build_embed("Exemption Removed", f"{target.mention} can be jailed again."), ephemeral=True)
 
 
-class ExemptAddView(discord.ui.View):
+class ExemptAddRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="Search for a role to exempt", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        await db().execute(
+            "INSERT OR IGNORE INTO exempt_entries (guild_id, entity_id, entity_type) VALUES (?, ?, 'role')",
+            (interaction.guild.id, target.id),
+        )
+        await db().commit()
+        await interaction.response.send_message(
+            embed=build_embed("Exemption Added", f"{target.mention} can no longer be jailed."), ephemeral=True)
+
+
+class ExemptRemoveRoleSelect(discord.ui.RoleSelect):
+    def __init__(self):
+        super().__init__(placeholder="Search for a role to remove exemption from", min_values=1, max_values=1)
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        result = await db().execute(
+            "DELETE FROM exempt_entries WHERE guild_id = ? AND entity_id = ? AND entity_type = 'role'",
+            (interaction.guild.id, target.id),
+        )
+        await db().commit()
+        if result.rowcount == 0:
+            return await interaction.response.send_message(
+                embed=error_embed(f"{target.mention} was not exempt."), ephemeral=True)
+        await interaction.response.send_message(
+            embed=build_embed("Exemption Removed", f"{target.mention} can be jailed again."), ephemeral=True)
+
+
+class ExemptAddUserView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
         self.add_item(ExemptAddSelect())
 
 
-class ExemptRemoveView(discord.ui.View):
+class ExemptAddRoleView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(ExemptAddRoleSelect())
+
+
+class ExemptRemoveUserView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=180)
         self.add_item(ExemptRemoveSelect())
 
 
+class ExemptRemoveRoleView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=180)
+        self.add_item(ExemptRemoveRoleSelect())
+
+
 class ExemptManageView(discord.ui.View):
-    """Posted by /jailmanage exempt — Add / Remove buttons, each opens a user-search select."""
+    """
+    Posted by /jailmanage exempt. Exemptions can target a role or a user,
+    so Add/Remove each offer a User button and a Role button; the chosen
+    one opens the matching search select (UserSelect or RoleSelect).
+    """
 
     def __init__(self):
         super().__init__(timeout=180)
 
-    @discord.ui.button(label="Add", style=discord.ButtonStyle.success)
-    async def add(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Add User", style=discord.ButtonStyle.success, row=0)
+    async def add_user(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             embed=build_embed("Add Exemption", "Search for the user to exempt from ever being jailed."),
-            view=ExemptAddView(), ephemeral=True)
+            view=ExemptAddUserView(), ephemeral=True)
 
-    @discord.ui.button(label="Remove", style=discord.ButtonStyle.danger)
-    async def remove(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Add Role", style=discord.ButtonStyle.success, row=0)
+    async def add_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=build_embed("Add Exemption", "Search for the role to exempt from ever being jailed."),
+            view=ExemptAddRoleView(), ephemeral=True)
+
+    @discord.ui.button(label="Remove User", style=discord.ButtonStyle.danger, row=1)
+    async def remove_user(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(
             embed=build_embed("Remove Exemption", "Search for the user to remove the exemption from."),
-            view=ExemptRemoveView(), ephemeral=True)
+            view=ExemptRemoveUserView(), ephemeral=True)
+
+    @discord.ui.button(label="Remove Role", style=discord.ButtonStyle.danger, row=1)
+    async def remove_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(
+            embed=build_embed("Remove Exemption", "Search for the role to remove the exemption from."),
+            view=ExemptRemoveRoleView(), ephemeral=True)
 
 
 # ----------------------------------------------------------------------
@@ -186,9 +247,11 @@ class PermissionsCog(commands.Cog):
     Exemptions and trusted-moderator management.
 
     /jailperms shows a dropdown to browse trusted moderators or exemptions.
-    /jailmanage exempt and /jailmanage trusted each post an embed with
-    Add/Remove buttons; each button opens a user-search select (UserSelect)
-    instead of taking a slash-command parameter directly.
+    /jailmanage exempt posts Add User/Add Role/Remove User/Remove Role
+    buttons (exemptions can target a role or a user), each opening the
+    matching search select (UserSelect or RoleSelect). /jailmanage trusted
+    stays user-only, since trusted-moderator access is tied to individual
+    members, not roles.
     """
 
     def __init__(self, bot: commands.Bot):
@@ -197,7 +260,7 @@ class PermissionsCog(commands.Cog):
     jailmanage = app_commands.Group(name="jailmanage", description="Manage jail system permissions.",
                                      default_permissions=discord.Permissions(administrator=True))
 
-    @jailmanage.command(name="exempt", description="Exempt or un-exempt a user from ever being jailed.")
+    @jailmanage.command(name="exempt", description="Exempt or un-exempt a role or user from ever being jailed.")
     async def jailmanage_exempt(self, interaction: discord.Interaction):
         await interaction.response.send_message(
             embed=build_embed("Manage Exemptions", "Add or remove a user's exemption from jailing."),
