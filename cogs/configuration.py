@@ -1,14 +1,19 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
-
 from database import set_guild_config, get_guild_config
 from utils.embeds import build_embed, error_embed, format_duration
 from utils.duration import parse_duration
 
 
 class Configuration(commands.Cog):
-    """Server-level jail system configuration. Grouped under /jailconfig (see naming note in sentence.py)."""
+    """
+    Server-level jail system configuration. Grouped under /jailconfig (see
+    naming note in sentence.py). /jailconfig autorestore has been removed
+    per spec; the underlying auto_restore config value is still read by
+    release_member() in utils/jail_actions.py, it just can no longer be
+    toggled via a command.
+    """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -49,12 +54,6 @@ class Configuration(commands.Cog):
             return await interaction.response.send_message(embed=error_embed(str(exc)))
         await set_guild_config(interaction.guild.id, default_seconds=seconds)
         await interaction.response.send_message(embed=build_embed("Config Updated", f"Default jail duration set to {format_duration(seconds)}."))
-
-    @jailconfig.command(name="autorestore", description="Toggle automatic role restoration.")
-    @app_commands.describe(enabled="Whether roles should be restored automatically on release")
-    async def autorestore(self, interaction: discord.Interaction, enabled: bool):
-        await set_guild_config(interaction.guild.id, auto_restore=int(enabled))
-        await interaction.response.send_message(embed=build_embed("Config Updated", f"Automatic role restoration {'enabled' if enabled else 'disabled'}."))
 
 
 async def setup(bot: commands.Bot):
