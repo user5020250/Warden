@@ -105,11 +105,15 @@ async def jail_member(
 
     if cell_channel is not None:
         try:
-            await cell_channel.send(embed=build_embed(
-                f"You have been jailed.",
-                f"Reason: {reason}\nDuration: {format_duration(duration_seconds)}\nCase ID: #{case_id}\n\n"
-                "Only you and staff can see this channel. It will be deleted automatically once your sentence ends.",
-            ))
+            # Ping the member in their cell channel so they're notified they've been jailed.
+            await cell_channel.send(
+                content=member.mention,
+                embed=build_embed(
+                    f"You have been jailed.",
+                    f"Reason: {reason}\nDuration: {format_duration(duration_seconds)}\nCase ID: #{case_id}\n\n"
+                    "Only you and staff can see this channel. It will be deleted automatically once your sentence ends.",
+                ),
+            )
         except discord.Forbidden:
             pass
 
