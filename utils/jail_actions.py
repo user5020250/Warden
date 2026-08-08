@@ -155,11 +155,14 @@ async def release_member(
     case_id: int,
     method: str,
     bot: discord.Client,
+    reason: str | None = None,
 ) -> tuple[bool, str]:
     """
     Releases a member from jail: restores their prior roles (if enabled),
     removes the jail role, closes the case. `method` is one of
-    'released', 'pardoned', 'expired', 'forced'.
+    'released', 'pardoned', 'expired', 'forced'. `reason` is an optional
+    note on why they were released (only used by moderator-initiated
+    releases, e.g. /release).
     """
     cur = await db().execute(
         "SELECT * FROM jail_cases WHERE guild_id = ? AND case_id = ? AND status = 'active'",
@@ -189,9 +192,15 @@ async def release_member(
         "UPDATE jail_cases SET status = ?, released_at = ?, released_by = ? WHERE guild_id = ? AND case_id = ? AND status = 'active'",
         (method, now(), moderator.id if moderator else None, guild.id, case_id),
     )
+    if reason:
+        combined = f"{case['notes']}\nReleased: {reason}" if case["notes"] else f"Released: {reason}"
+        await db().execute(
+            "UPDATE jail_cases SET notes = ? WHERE guild_id = ? AND case_id = ? AND status = ?",
+            (combined, guild.id, case_id, method),
+        )
     await db().commit()
     await log_action(guild.id, method, user_id=case["user_id"],
-                      moderator_id=moderator.id if moderator else None, case_id=case_id)
+                      moderator_id=moderator.id if moderator else None, case_id=case_id, detail=reason)
 
     # Tear down that member's private cell channel now that their case is closed.
     if case["cell_channel_id"]:
@@ -204,9 +213,10 @@ async def release_member(
 
     if member is not None and cfg["dm_notifications"]:
         try:
+            reason_line = f"\nReason: {reason}" if reason else ""
             embed = build_embed(
                 "You have been released",
-                f"Server: {guild.name}\nCase ID: #{case_id}\nMethod: {method}",
+                f"Server: {guild.name}\nCase ID: #{case_id}\nMethod: {method}{reason_line}",
             )
             await member.send(embed=embed)
         except discord.Forbidden:
@@ -223,6 +233,7 @@ async def release_member(
                     ("Moderator", moderator.mention if moderator else "System", True),
                     ("Method", method, True),
                     ("Case ID", f"#{case_id}", True),
+                    ("Reason", reason or "No reason provided", False),
                 ],
             )
             try:
