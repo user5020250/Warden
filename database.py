@@ -32,6 +32,7 @@ async def init_db() -> None:
             log_channel_id INTEGER,
             appeal_channel_id INTEGER,
             default_minutes INTEGER DEFAULT 60,
+            default_seconds INTEGER DEFAULT 3600,
             dm_notifications INTEGER DEFAULT 1,
             auto_restore INTEGER DEFAULT 1,
             voice_mode TEXT DEFAULT 'disconnect'
@@ -135,6 +136,16 @@ async def init_db() -> None:
     columns = {row["name"] for row in await cur.fetchall()}
     if "cell_channel_id" not in columns:
         await _db.execute("ALTER TABLE jail_cases ADD COLUMN cell_channel_id INTEGER")
+        await _db.commit()
+
+    # Migration: guild_config used to only store a default duration in
+    # whole minutes. default_seconds lets /jailconfig defaulttime accept
+    # full duration strings (e.g. "1hr", "45m") like every other command.
+    cur = await _db.execute("PRAGMA table_info(guild_config)")
+    guild_columns = {row["name"] for row in await cur.fetchall()}
+    if "default_seconds" not in guild_columns:
+        await _db.execute("ALTER TABLE guild_config ADD COLUMN default_seconds INTEGER DEFAULT 3600")
+        await _db.execute("UPDATE guild_config SET default_seconds = default_minutes * 60")
         await _db.commit()
 
 
