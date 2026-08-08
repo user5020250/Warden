@@ -26,7 +26,6 @@ COGS = [
     "cogs.setup",
     "cogs.jail_basic",
     "cogs.sentence",
-    "cogs.cases",
     "cogs.appeals",
     "cogs.cell",
     "cogs.mod_utils",
