@@ -6,176 +6,156 @@ from database import db, now
 from utils.embeds import build_embed, error_embed, format_duration
 from utils.permissions import trusted_only
 from utils.jail_actions import release_member
+from utils.duration import parse_duration
 
 
-async def _active_case(guild_id: int, member: discord.Member):
+async def _active_case(guild_id: int, user_id: int):
     cur = await db().execute(
         "SELECT * FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active'"
         " ORDER BY created_at DESC LIMIT 1",
-        (guild_id, member.id),
+        (guild_id, user_id),
     )
     return await cur.fetchone()
 
 
+class DurationModal(discord.ui.Modal):
+    """Shared modal for Extend / Reduce / Set Time — all just need one duration string."""
+
+    duration = discord.ui.TextInput(
+        label="Duration", placeholder="e.g. 30s, 10m, 2hr, 1d", max_length=32,
+    )
+
+    def __init__(self, title: str, member: discord.Member, action: str, bot: commands.Bot,
+                 allow_permanent: bool = False):
+        super().__init__(title=title)
+        self.member = member
+        self.action = action
+        self.bot = bot
+        self.allow_permanent = allow_permanent
+        if allow_permanent:
+            self.duration.placeholder = "e.g. 30s, 10m, 2hr, 1d, or permanent"
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            seconds = parse_duration(self.duration.value, allow_permanent=self.allow_permanent)
+        except ValueError as exc:
+            return await interaction.followup.send(embed=error_embed(str(exc)), ephemeral=True)
+
+        case = await _active_case(interaction.guild.id, self.member.id)
+        if case is None:
+            return await interaction.followup.send(
+                embed=error_embed(f"{self.member.mention} is not currently jailed."), ephemeral=True)
+
+        if self.action == "extend":
+            if case["duration_seconds"] is None:
+                return await interaction.followup.send(embed=error_embed("That sentence is already permanent."), ephemeral=True)
+            elapsed = now() - case["created_at"]
+            remaining = max(0, case["duration_seconds"] - elapsed)
+            new_remaining = remaining + seconds
+            new_duration = elapsed + new_remaining
+            await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+                                (new_duration, interaction.guild.id, case["case_id"]))
+            await db().commit()
+            return await interaction.followup.send(embed=build_embed(
+                "Sentence Extended",
+                f"Case #{case['case_id']} extended by {format_duration(seconds)}. New time remaining: {format_duration(new_remaining)}."
+            ), ephemeral=True)
+
+        if self.action == "reduce":
+            if case["duration_seconds"] is None:
+                return await interaction.followup.send(embed=error_embed(
+                    "That sentence is permanent; use Set Time to give it a fixed length first."), ephemeral=True)
+            elapsed = now() - case["created_at"]
+            remaining = max(0, case["duration_seconds"] - elapsed)
+            new_remaining = max(0, remaining - seconds)
+            new_duration = elapsed + new_remaining
+            await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+                                (new_duration, interaction.guild.id, case["case_id"]))
+            await db().commit()
+            if new_remaining <= 0:
+                success, message = await release_member(interaction.guild, self.member, interaction.user,
+                                                          case["case_id"], "released", self.bot)
+                return await interaction.followup.send(embed=build_embed(
+                    "Sentence Reduced", "Sentence reached zero — " + message), ephemeral=True)
+            return await interaction.followup.send(embed=build_embed(
+                "Sentence Reduced",
+                f"Case #{case['case_id']} reduced by {format_duration(seconds)}. New time remaining: {format_duration(new_remaining)}."
+            ), ephemeral=True)
+
+        if self.action == "settime":
+            new_duration_seconds = seconds  # None means permanent
+            if new_duration_seconds is None:
+                await db().execute("UPDATE jail_cases SET duration_seconds = NULL WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+                                    (interaction.guild.id, case["case_id"]))
+                await db().commit()
+                return await interaction.followup.send(embed=build_embed(
+                    "Sentence Updated", f"Case #{case['case_id']} is now permanent until manually released."), ephemeral=True)
+            elapsed = now() - case["created_at"]
+            new_duration = elapsed + new_duration_seconds
+            await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+                                (new_duration, interaction.guild.id, case["case_id"]))
+            await db().commit()
+            return await interaction.followup.send(embed=build_embed(
+                "Sentence Updated",
+                f"Case #{case['case_id']} time remaining set to {format_duration(new_duration_seconds)}."
+            ), ephemeral=True)
+
+
+class SentenceView(discord.ui.View):
+    """Buttons shown on /sentence — each opens a modal to collect a duration."""
+
+    def __init__(self, member: discord.Member, bot: commands.Bot):
+        super().__init__(timeout=180)
+        self.member = member
+        self.bot = bot
+
+    @discord.ui.button(label="Extend", style=discord.ButtonStyle.success)
+    async def extend(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DurationModal("Extend Sentence", self.member, "extend", self.bot))
+
+    @discord.ui.button(label="Reduce", style=discord.ButtonStyle.primary)
+    async def reduce(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(DurationModal("Reduce Sentence", self.member, "reduce", self.bot))
+
+    @discord.ui.button(label="Set Time", style=discord.ButtonStyle.secondary)
+    async def settime(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(
+            DurationModal("Set Time Remaining", self.member, "settime", self.bot, allow_permanent=True))
+
+
 class Sentence(commands.Cog):
     """
-    Sentence management. Grouped under /sentence rather than /jail because
-    Discord does not allow a command and a subcommand group to share the
-    same name, and /jail is already the direct jailing action.
+    Sentence management. A single /sentence command (not a group — see the
+    naming note in jail_basic.py) posts an embed with a button for each
+    action; each button opens a modal asking for a duration string.
+    /sentence pardon and /sentence freeze/resume have been removed per
+    spec; "permanent" is reachable through Set Time.
     """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    sentence = app_commands.Group(name="sentence", description="Manage an active jail sentence.")
-
-    @sentence.command(name="extend", description="Add more jail time.")
-    @app_commands.describe(member="The jailed member", minutes="Minutes to add")
-    @trusted_only()
-    async def extend(self, interaction: discord.Interaction, member: discord.Member, minutes: int):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        if case["duration_seconds"] is None:
-            return await interaction.followup.send(embed=error_embed("That sentence is already permanent."))
-        elapsed = now() - case["created_at"]
-        remaining = max(0, case["duration_seconds"] - elapsed)
-        new_remaining = remaining + minutes * 60
-        new_duration = elapsed + new_remaining
-        await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE case_id = ?",
-                            (new_duration, case["case_id"]))
-        await db().commit()
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Extended",
-            f"Case #{case['case_id']} extended by {minutes} minute(s). New time remaining: {format_duration(new_remaining)}."
-        ))
-
-    @sentence.command(name="reduce", description="Reduce jail time.")
-    @app_commands.describe(member="The jailed member", minutes="Minutes to remove")
-    @trusted_only()
-    async def reduce(self, interaction: discord.Interaction, member: discord.Member, minutes: int):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        if case["duration_seconds"] is None:
-            return await interaction.followup.send(embed=error_embed(
-                "That sentence is permanent; use /sentence settime to give it a fixed length first."))
-        elapsed = now() - case["created_at"]
-        remaining = max(0, case["duration_seconds"] - elapsed)
-        new_remaining = max(0, remaining - minutes * 60)
-        new_duration = elapsed + new_remaining
-        await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE case_id = ?",
-                            (new_duration, case["case_id"]))
-        await db().commit()
-        if new_remaining <= 0:
-            success, message = await release_member(interaction.guild, member, interaction.user,
-                                                      case["case_id"], "released", self.bot)
-            return await interaction.followup.send(embed=build_embed("Sentence Reduced", "Sentence reached zero — " + message))
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Reduced",
-            f"Case #{case['case_id']} reduced by {minutes} minute(s). New time remaining: {format_duration(new_remaining)}."
-        ))
-
-    @sentence.command(name="settime", description="Replace the remaining sentence.")
-    @app_commands.describe(member="The jailed member", minutes="New total minutes remaining")
-    @trusted_only()
-    async def settime(self, interaction: discord.Interaction, member: discord.Member, minutes: int):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        elapsed = now() - case["created_at"]
-        new_duration = elapsed + max(0, minutes * 60)
-        await db().execute("UPDATE jail_cases SET duration_seconds = ? WHERE case_id = ?",
-                            (new_duration, case["case_id"]))
-        await db().commit()
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Updated", f"Case #{case['case_id']} time remaining set to {minutes} minute(s)."))
-
-    @sentence.command(name="permanent", description="Convert to permanent jail.")
+    @app_commands.command(name="sentence", description="Manage an active jail sentence.")
     @app_commands.describe(member="The jailed member")
     @trusted_only()
-    async def permanent(self, interaction: discord.Interaction, member: discord.Member):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
+    async def sentence(self, interaction: discord.Interaction, member: discord.Member):
+        case = await _active_case(interaction.guild.id, member.id)
         if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        await db().execute("UPDATE jail_cases SET duration_seconds = NULL WHERE case_id = ?", (case["case_id"],))
-        await db().commit()
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Updated", f"Case #{case['case_id']} is now permanent until manually released."))
-
-    @sentence.command(name="pardon", description="Completely forgive a user's sentence.")
-    @app_commands.describe(member="The jailed member")
-    @trusted_only()
-    async def pardon(self, interaction: discord.Interaction, member: discord.Member):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        success, message = await release_member(interaction.guild, member, interaction.user,
-                                                  case["case_id"], "pardoned", self.bot)
-        await interaction.followup.send(embed=build_embed("Pardon", message) if success else error_embed(message))
-
-    @sentence.command(name="freeze", description="Pause the jail timer.")
-    @app_commands.describe(member="The jailed member")
-    @trusted_only()
-    async def freeze(self, interaction: discord.Interaction, member: discord.Member):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        if case["frozen"]:
-            return await interaction.followup.send(embed=error_embed("That sentence is already frozen."))
-        if case["duration_seconds"] is None:
-            return await interaction.followup.send(embed=error_embed("Permanent sentences can't be frozen."))
-        elapsed = now() - case["created_at"]
-        remaining = max(0, case["duration_seconds"] - elapsed)
-        await db().execute(
-            "UPDATE jail_cases SET frozen = 1, remaining_seconds = ? WHERE case_id = ?",
-            (remaining, case["case_id"]),
+            return await interaction.response.send_message(
+                embed=error_embed(f"{member.mention} is not currently jailed."), ephemeral=True)
+        remaining = None
+        if case["duration_seconds"] is not None:
+            remaining = max(0, case["duration_seconds"] - (now() - case["created_at"]))
+        embed = build_embed(
+            f"Sentence — {member.display_name}",
+            None,
+            fields=[
+                ("Case ID", f"#{case['case_id']}", True),
+                ("Time Remaining", format_duration(remaining), True),
+            ],
         )
-        await db().commit()
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Frozen", f"Case #{case['case_id']} paused with {format_duration(remaining)} remaining."))
-
-    @sentence.command(name="resume", description="Resume a paused sentence.")
-    @app_commands.describe(member="The jailed member")
-    @trusted_only()
-    async def resume(self, interaction: discord.Interaction, member: discord.Member):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        if not case["frozen"]:
-            return await interaction.followup.send(embed=error_embed("That sentence is not frozen."))
-        new_duration = case["remaining_seconds"]
-        await db().execute(
-            "UPDATE jail_cases SET frozen = 0, created_at = ?, duration_seconds = ? WHERE case_id = ?",
-            (now(), new_duration, case["case_id"]),
-        )
-        await db().commit()
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Resumed", f"Case #{case['case_id']} resumed with {format_duration(new_duration)} remaining."))
-
-    @sentence.command(name="restart", description="Restart the timer from the beginning.")
-    @app_commands.describe(member="The jailed member")
-    @trusted_only()
-    async def restart(self, interaction: discord.Interaction, member: discord.Member):
-        await interaction.response.defer()
-        case = await _active_case(interaction.guild.id, member)
-        if case is None:
-            return await interaction.followup.send(embed=error_embed(f"{member.mention} is not currently jailed."))
-        original = case["remaining_seconds"] if case["frozen"] else case["duration_seconds"]
-        await db().execute(
-            "UPDATE jail_cases SET created_at = ?, frozen = 0, duration_seconds = ? WHERE case_id = ?",
-            (now(), original, case["case_id"]),
-        )
-        await db().commit()
-        await interaction.followup.send(embed=build_embed(
-            "Sentence Restarted", f"Case #{case['case_id']} timer restarted from the beginning."))
+        await interaction.response.send_message(embed=embed, view=SentenceView(member, self.bot))
 
 
 async def setup(bot: commands.Bot):
