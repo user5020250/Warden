@@ -29,7 +29,6 @@ COGS = [
     "cogs.appeals",
     "cogs.cell",
     "cogs.mod_utils",
-    "cogs.statistics",
     "cogs.configuration",
     "cogs.permissions_cog",
     "cogs.logs",
