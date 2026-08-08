@@ -10,10 +10,14 @@ restarts and redeploys on Railway as long as a persistent volume /
 the working directory is preserved between deploys of the same service.
 """
 
+import os
 import time
+import logging
 import aiosqlite
 
 from config import DB_PATH
+
+logger = logging.getLogger("jailbot")
 
 _db: aiosqlite.Connection | None = None
 
@@ -21,6 +25,20 @@ _db: aiosqlite.Connection | None = None
 async def init_db() -> None:
     """Open the database connection and create tables if they don't exist."""
     global _db
+
+    # Logged on every boot so a redeploy's logs show exactly which file the
+    # bot is using and whether it already existed (i.e. whether this boot
+    # is reusing persisted data or starting from a blank database). If
+    # DB_PATH isn't pointed at the mounted volume, "already existed: False"
+    # here after every deploy is the tell.
+    resolved_path = os.path.abspath(DB_PATH)
+    already_existed = os.path.exists(DB_PATH)
+    size = os.path.getsize(DB_PATH) if already_existed else 0
+    logger.info(
+        "Opening database at %s (DB_PATH=%r) — already existed: %s, size: %d bytes",
+        resolved_path, DB_PATH, already_existed, size,
+    )
+
     _db = await aiosqlite.connect(DB_PATH)
     _db.row_factory = aiosqlite.Row
     await _db.executescript(
