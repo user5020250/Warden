@@ -88,9 +88,8 @@ class JailHistoryPager(discord.ui.View):
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.danger)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        for child in self.children:
-            child.disabled = True
-        await interaction.response.edit_message(view=self)
+        await interaction.response.defer()
+        await interaction.delete_original_response()
         self.stop()
 
 
