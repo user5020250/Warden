@@ -3,7 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from database import set_guild_config, get_guild_config
-from utils.embeds import build_embed, error_embed
+from utils.embeds import build_embed, error_embed, format_duration
+from utils.duration import parse_duration
 
 
 class Configuration(commands.Cog):
@@ -40,10 +41,14 @@ class Configuration(commands.Cog):
         await interaction.response.send_message(embed=build_embed("Config Updated", f"Jail category set to {category.name}."))
 
     @jailconfig.command(name="defaulttime", description="Set default jail duration.")
-    @app_commands.describe(minutes="Default sentence length in minutes")
-    async def defaulttime(self, interaction: discord.Interaction, minutes: int):
-        await set_guild_config(interaction.guild.id, default_minutes=minutes)
-        await interaction.response.send_message(embed=build_embed("Config Updated", f"Default jail duration set to {minutes} minute(s)."))
+    @app_commands.describe(duration="Default sentence length, e.g. 30s, 10m, 2hr, 1d")
+    async def defaulttime(self, interaction: discord.Interaction, duration: str):
+        try:
+            seconds = parse_duration(duration)
+        except ValueError as exc:
+            return await interaction.response.send_message(embed=error_embed(str(exc)))
+        await set_guild_config(interaction.guild.id, default_seconds=seconds)
+        await interaction.response.send_message(embed=build_embed("Config Updated", f"Default jail duration set to {format_duration(seconds)}."))
 
     @jailconfig.command(name="autorestore", description="Toggle automatic role restoration.")
     @app_commands.describe(enabled="Whether roles should be restored automatically on release")
