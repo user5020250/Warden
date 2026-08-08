@@ -1,15 +1,20 @@
 """
-Parses short human-friendly duration strings such as "30s", "10m", "2h",
+Parses short human-friendly duration strings such as "30s", "10m", "2hr",
 "1d", or "permanent" into a number of seconds (or None for permanent).
 Shared by every command that lets a moderator pick a custom duration
-(/jail, /jailmod mute, /visitation, /solitary, ...).
+(/jail, /sentence, /visitation, /solitary, ...).
 """
 
 import re
 
-_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+_UNIT_SECONDS = {
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+    "d": 86400, "day": 86400, "days": 86400,
+}
 _PERMANENT_WORDS = {"permanent", "perm", "forever"}
-_PATTERN = re.compile(r"^(\d+)\s*([smhd])$")
+_PATTERN = re.compile(r"^(\d+)\s*([a-z]+)$")
 
 
 def parse_duration(value: str, allow_permanent: bool = False) -> int | None:
@@ -27,11 +32,11 @@ def parse_duration(value: str, allow_permanent: bool = False) -> int | None:
         return None
 
     match = _PATTERN.match(text)
-    if not match:
+    if not match or match.group(2) not in _UNIT_SECONDS:
         hint = " or 'permanent'" if allow_permanent else ""
         raise ValueError(
-            f"Invalid duration '{value}'. Use a number followed by s/m/h/d "
-            f"(e.g. 30s, 10m, 2h, 1d){hint}."
+            f"Invalid duration '{value}'. Use a number followed by a unit "
+            f"(e.g. 30s, 10m, 2hr, 1d){hint}."
         )
 
     amount, unit = match.groups()
