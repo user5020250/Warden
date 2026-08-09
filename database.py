@@ -3,9 +3,10 @@ import time
 import logging
 import aiosqlite
 
-from config import DB_PATH
+from config import DB_PATH, DEFAULT_JAIL_SECONDS, DEFAULT_AUTOJAIL_THRESHOLD, \
+    DEFAULT_AUTOJAIL_WINDOW_SECONDS, DEFAULT_AUTOJAIL_DURATION_SECONDS
 
-logger = logging.getLogger("jailbot")
+logger = logging.getLogger("warden")
 
 _db: aiosqlite.Connection | None = None
 
@@ -30,18 +31,17 @@ async def init_db() -> None:
     _db = await aiosqlite.connect(DB_PATH)
     _db.row_factory = aiosqlite.Row
     await _db.executescript(
-        """
+        f"""
         CREATE TABLE IF NOT EXISTS guild_config (
             guild_id INTEGER PRIMARY KEY,
             jail_role_id INTEGER,
             jail_category_id INTEGER,
             log_channel_id INTEGER,
-            appeal_channel_id INTEGER,
-            default_minutes INTEGER DEFAULT 60,
-            default_seconds INTEGER DEFAULT 3600,
-            dm_notifications INTEGER DEFAULT 1,
-            auto_restore INTEGER DEFAULT 1,
-            voice_mode TEXT DEFAULT 'disconnect'
+            default_seconds INTEGER DEFAULT {DEFAULT_JAIL_SECONDS},
+            autojail_enabled INTEGER DEFAULT 0,
+            autojail_threshold INTEGER DEFAULT {DEFAULT_AUTOJAIL_THRESHOLD},
+            autojail_window_seconds INTEGER DEFAULT {DEFAULT_AUTOJAIL_WINDOW_SECONDS},
+            autojail_duration_seconds INTEGER DEFAULT {DEFAULT_AUTOJAIL_DURATION_SECONDS}
         );
 
         CREATE TABLE IF NOT EXISTS jail_cases (
@@ -53,15 +53,10 @@ async def init_db() -> None:
             reason TEXT,
             created_at INTEGER NOT NULL,
             duration_seconds INTEGER,          -- NULL = permanent
-            remaining_seconds INTEGER,         -- used while frozen
-            frozen INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'active',      -- active, released, pardoned, expired
+            status TEXT DEFAULT 'active',      -- active, released, expired
             released_at INTEGER,
             released_by INTEGER,
             role_backup TEXT,                  -- comma separated role ids removed on jail
-            evidence TEXT,
-            notes TEXT,
-            on_probation INTEGER DEFAULT 0,
             cell_channel_id INTEGER            -- per-user jail cell channel, deleted on release
         );
 
@@ -72,7 +67,26 @@ async def init_db() -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_jail_cases_active_number
             ON jail_cases (guild_id, case_id) WHERE status = 'active';
 
-        CREATE TABLE IF NOT EXISTS jail_warnings (
+        CREATE TABLE IF NOT EXISTS case_notes (
+            note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            case_id INTEGER NOT NULL,
+            moderator_id INTEGER NOT NULL,
+            note TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS case_evidence (
+            evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            case_id INTEGER NOT NULL,
+            moderator_id INTEGER NOT NULL,
+            url TEXT NOT NULL,
+            filename TEXT,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS warnings (
             warning_id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
@@ -81,46 +95,46 @@ async def init_db() -> None:
             created_at INTEGER NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS reports (
+            report_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            reporter_id INTEGER NOT NULL,
+            reported_id INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_url TEXT,
+            status TEXT DEFAULT 'pending',     -- pending, closed
+            created_at INTEGER NOT NULL,
+            closed_by INTEGER,
+            closed_at INTEGER,
+            close_reason TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS appeals (
             appeal_id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER NOT NULL,
             case_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
-            message TEXT,
-            status TEXT DEFAULT 'pending',     -- pending, approved, denied, withdrawn
+            reason TEXT NOT NULL,
+            status TEXT DEFAULT 'pending',     -- pending, approved, denied, cancelled
             created_at INTEGER NOT NULL,
             decided_by INTEGER,
             decided_at INTEGER,
-            channel_id INTEGER,
-            message_id INTEGER
+            decision_reason TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS trusted_moderators (
+        CREATE TABLE IF NOT EXISTS autojail_whitelist (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             PRIMARY KEY (guild_id, user_id)
         );
 
-        CREATE TABLE IF NOT EXISTS exempt_entries (
+        CREATE TABLE IF NOT EXISTS cellmates (
             guild_id INTEGER NOT NULL,
-            entity_id INTEGER NOT NULL,
-            entity_type TEXT NOT NULL,         -- role or user
-            PRIMARY KEY (guild_id, entity_id, entity_type)
-        );
-
-        CREATE TABLE IF NOT EXISTS autojail_config (
-            guild_id INTEGER PRIMARY KEY,
-            enabled INTEGER DEFAULT 0,
-            max_violations INTEGER DEFAULT 3,
-            window_seconds INTEGER DEFAULT 60,
-            default_minutes INTEGER DEFAULT 30
-        );
-
-        CREATE TABLE IF NOT EXISTS autojail_lists (
-            guild_id INTEGER NOT NULL,
-            entity_id INTEGER NOT NULL,
-            list_type TEXT NOT NULL,           -- whitelist or blacklist
-            PRIMARY KEY (guild_id, entity_id, list_type)
+            case_id INTEGER NOT NULL,
+            member_id INTEGER NOT NULL,
+            added_by INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, case_id, member_id)
         );
 
         CREATE TABLE IF NOT EXISTS cell_visitations (
@@ -128,8 +142,8 @@ async def init_db() -> None:
             guild_id INTEGER NOT NULL,
             channel_id INTEGER NOT NULL,
             visitor_id INTEGER NOT NULL,
-            case_id INTEGER,
             occupant_id INTEGER,
+            case_id INTEGER,
             granted_by INTEGER,
             created_at INTEGER NOT NULL,
             expires_at INTEGER NOT NULL,
@@ -149,23 +163,6 @@ async def init_db() -> None:
         """
     )
     await _db.commit()
-
-    # Migration: older databases were created before cell_channel_id existed.
-    cur = await _db.execute("PRAGMA table_info(jail_cases)")
-    columns = {row["name"] for row in await cur.fetchall()}
-    if "cell_channel_id" not in columns:
-        await _db.execute("ALTER TABLE jail_cases ADD COLUMN cell_channel_id INTEGER")
-        await _db.commit()
-
-    # Migration: guild_config used to only store a default duration in
-    # whole minutes. default_seconds lets /jailconfig defaulttime accept
-    # full duration strings (e.g. "1hr", "45m") like every other command.
-    cur = await _db.execute("PRAGMA table_info(guild_config)")
-    guild_columns = {row["name"] for row in await cur.fetchall()}
-    if "default_seconds" not in guild_columns:
-        await _db.execute("ALTER TABLE guild_config ADD COLUMN default_seconds INTEGER DEFAULT 3600")
-        await _db.execute("UPDATE guild_config SET default_seconds = default_minutes * 60")
-        await _db.commit()
 
 
 def db() -> aiosqlite.Connection:
@@ -205,6 +202,15 @@ async def set_guild_config(guild_id: int, **fields) -> None:
     await db().commit()
 
 
+async def reset_guild_config(guild_id: int) -> None:
+    await db().execute("DELETE FROM guild_config WHERE guild_id = ?", (guild_id,))
+    await db().execute("INSERT INTO guild_config (guild_id) VALUES (?)", (guild_id,))
+    await db().commit()
+
+
+# ---------------------------------------------------------------------------
+# Jail case helpers
+# ---------------------------------------------------------------------------
 async def next_case_number(guild_id: int) -> int:
     """
     Picks the lowest case number not currently in use by an active case in
@@ -221,15 +227,6 @@ async def next_case_number(guild_id: int) -> int:
     return n
 
 
-async def log_action(guild_id, action, user_id=None, moderator_id=None, case_id=None, detail=None):
-    await db().execute(
-        "INSERT INTO action_logs (guild_id, case_id, user_id, moderator_id, action, detail, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (guild_id, case_id, user_id, moderator_id, action, detail, now()),
-    )
-    await db().commit()
-
-
 async def get_active_case(guild_id: int, user_id: int) -> aiosqlite.Row | None:
     """The user's current active case in this guild, if any."""
     cur = await db().execute(
@@ -240,14 +237,32 @@ async def get_active_case(guild_id: int, user_id: int) -> aiosqlite.Row | None:
     return await cur.fetchone()
 
 
+async def get_case(guild_id: int, case_id: int) -> aiosqlite.Row | None:
+    """Most recent case row matching this case number, active or historical."""
+    cur = await db().execute(
+        "SELECT * FROM jail_cases WHERE guild_id = ? AND case_id = ? ORDER BY created_at DESC LIMIT 1",
+        (guild_id, case_id),
+    )
+    return await cur.fetchone()
+
+
+async def log_action(guild_id, action, user_id=None, moderator_id=None, case_id=None, detail=None):
+    await db().execute(
+        "INSERT INTO action_logs (guild_id, case_id, user_id, moderator_id, action, detail, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (guild_id, case_id, user_id, moderator_id, action, detail, now()),
+    )
+    await db().commit()
+
+
 # ---------------------------------------------------------------------------
 # Cell visitation helpers (used for auto-revoke of temporary cell access)
 # ---------------------------------------------------------------------------
-async def add_visitation(guild_id, channel_id, visitor_id, case_id, occupant_id, granted_by, expires_at) -> int:
+async def add_visitation(guild_id, channel_id, visitor_id, occupant_id, case_id, granted_by, expires_at) -> int:
     cur = await db().execute(
-        "INSERT INTO cell_visitations (guild_id, channel_id, visitor_id, case_id, occupant_id, granted_by,"
+        "INSERT INTO cell_visitations (guild_id, channel_id, visitor_id, occupant_id, case_id, granted_by,"
         " created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (guild_id, channel_id, visitor_id, case_id, occupant_id, granted_by, now(), expires_at),
+        (guild_id, channel_id, visitor_id, occupant_id, case_id, granted_by, now(), expires_at),
     )
     await db().commit()
     return cur.lastrowid
@@ -268,8 +283,9 @@ async def close_visitation(visitation_id: int, status: str = "expired") -> None:
 
 
 async def clear_dead_cell_channel(guild_id: int, channel_id: int) -> None:
-    """Called when a cell channel is deleted directly in Discord (not via /release),
-    so the case row doesn't keep pointing at a channel that no longer exists."""
+    """Called when a cell channel is deleted directly in Discord (not via
+    /unjail), so the case row doesn't keep pointing at a channel that no
+    longer exists, and any visitations tied to it are revoked."""
     await db().execute(
         "UPDATE jail_cases SET cell_channel_id = NULL WHERE guild_id = ? AND cell_channel_id = ? AND status = 'active'",
         (guild_id, channel_id),
