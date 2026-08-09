@@ -1,6 +1,0 @@
-.env
-__pycache__/
-*.pyc
-jail.db
-.venv/
-venv/
