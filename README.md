@@ -1,88 +1,82 @@
-# Jail System Discord Bot
+# Warden — Discord Moderation Bot
 
-A discord.py moderation bot that implements a full "jail" system: role-based
-jailing with timed sentences, cases, appeals decided by button instead of
-command, autojail detection, statistics, logging, and a category-dropdown
-`/help`. All embeds are pure black, and there are no emojis anywhere in the
-bot's output.
+A discord.py moderation bot built around a full "jail" system: role-based
+jailing with timed sentences, cases (with moderator notes and evidence),
+warnings, reports, appeals, AutoJail, cellmates and cell visitations,
+diagnostics, and a category-dropdown `/help`. Every embed is pure black
+with bold field names and backtick-formatted values, and there are no
+emojis anywhere in the bot's output.
 
 ## What changed from the original command list
 
-**1. Command-naming conflicts.** Discord does not allow a slash command to be
-both a standalone command and a group of subcommands at the same time. The
-spec used `/jail` both as a direct action ("jail a member") and as a prefix
-for many subcommands ("/jail extend", "/jail stats", "/jail role", etc).
-Since jailing someone directly is the most important, most-used command, it
-kept the name `/jail`, and the rest were organized into their own groups:
+**1. Command-naming conflicts.** Discord does not allow a slash command to
+be both a standalone command and a group of subcommands at the same time.
+Three places in the spec ran into this:
 
-| Old (in the spec)               | New                  |
-|----------------------------------|----------------------|
-| `/jail list/info/history/search` | `/jailinfo ...`      |
-| `/jail extend/reduce/settime/...`| `/sentence ...`      |
-| `/jail warn/mute/nickname/...`   | `/jailmod ...`       |
-| `/jail stats/top/moderators/...` | `/jailstats ...`     |
-| `/jail role/logchannel/...`      | `/jailconfig ...`    |
-| `/jail exempt/trusted/permissions`| `/jailperms ...`    |
+| Old (in the spec)                          | New                         |
+|---------------------------------------------|------------------------------|
+| `/case <case_id>` + `/case view/notes/evidence` | `/caseinfo <case_id>` + `/case view` / `/case notes add` / `/case evidence add` |
+| `/warning <warning_id>` + `/warning delete`, `/warnings <member>` + `/warnings clear` | Consolidated into one group: `/warnings list/info/delete/clear` |
+| `/autojail` (panel) + `/autojail settings/threshold/window/duration/whitelist` | `/autojail` (panel) stays; config moved to `/autojailconfig settings/threshold/window/duration/whitelist add/remove` |
 
-`/case`, `/appeal`, `/cell`, `/autojail`, and `/logs` didn't have this
-conflict and kept their original group names.
+**2. Single log channel.** The spec's `/jailconfig` only defines one
+channel (`logchannel`), so jail actions, warnings, reports, and appeal
+decisions all post to that same channel rather than each having their own.
 
-**2. Appeals now use buttons, not commands.** `/appeal accept` and
-`/appeal deny` were removed. Every submitted appeal is posted as a black
-embed in the appeal channel with **Approve** and **Decline** buttons.
-Clicking Approve releases the member and restores their roles; clicking
-Decline keeps them jailed. Only trusted moderators can use the buttons.
+**3. AutoJail detection.** The spec describes a threshold and a counting
+window but not what counts as a "violation." This build treats **message
+rate** as the violation: if a member sends `threshold` or more messages
+within the rolling `window`, they're jailed automatically for the
+configured AutoJail duration. Staff and whitelisted members are exempt.
 
-**3. Duplicates removed.** In the "Fun" category (renamed **Situational
-Commands**, since the logic is meant to mirror real moderation, not be a
-joke feature):
-- `/parole` was removed — it was functionally identical to `/probation`
-  (an early, conditional release).
-- `/goodbehavior` was removed — it was functionally identical to
-  `/sentence reduce` (reducing time remaining), just with a fixed reason.
+**4. No separate trusted-moderator list.** Every staff-gated command
+checks for the real Discord permissions Moderate Members, Manage Roles, or
+Administrator (or being the server owner) — there's no separate
+allow-list to manage on top of that.
 
-`/solitary`, `/visitation`, and `/cellmate` were kept since each does
-something the rest of the system doesn't.
-
-**4. Removed per your instructions.** `/cell clean` and `/cell purge` are
-gone. There is no jail voice channel and no voice-related commands
-(`/jail disconnect`, `/jail movevc` do not exist in this build).
+**5. Appeals and report review are command-driven, not button-driven.**
+The spec lists `/appeal approve/deny` and `/reportclose` as commands
+(unlike an accept/decline-button flow), so that's how they're implemented
+here. `/autojail`'s enable/disable panel is the one place the spec asks
+for buttons, and that's the one place this build uses them.
 
 ## Command reference
 
 Run `/help` in Discord for the full, live, dropdown-based reference —
 every command's name, what it does, exact usage, and the permission it
 requires. The categories are: Setup, Basic Jail, Sentence Management,
-Cases, Appeals, Jail Cell, Moderator Utilities, Auto Jail, Statistics,
-Configuration, Permissions, Logging, and Situational Commands.
+Cases, Reports, Warnings, Appeals, AutoJail, Cellmate & Visitation,
+Configuration, and Diagnostics.
 
 ## How the logic works (real-world scenario mapping)
 
-- **Jailing** strips a member's current roles (saved so they can be restored
-  later), applies a single "Jailed" role, opens a case, DMs the member, and
-  posts to the log channel — like being processed into custody.
+- **Jailing** strips a member's current roles (saved so they can be
+  restored later), applies a single "Jailed" role, opens a case, creates a
+  private cell channel, and DMs the member — like being processed into
+  custody.
 - **Sentences** count down in real time via a background task; when time
   runs out the member is automatically released, same as an expiring
   sentence.
-- **Freeze / resume** pause and resume the countdown, like a sentence being
-  put on hold pending a hearing.
+- **Cases** carry a running record of moderator notes and evidence
+  attachments, like an incident file that gets added to over time.
+- **Reports** let any member flag another member for staff review;
+  `/reportclose` is the record of that review having happened.
+- **Warnings** are a lighter-weight record than a full case — no role
+  change, just a logged note tied to the member.
 - **Appeals** work like a real appeals process: the appellant makes their
-  case, staff review it in a dedicated channel, and a decision (Approve /
-  Decline) is recorded and DMed to them.
-- **Probation** releases someone early but flags the case for monitoring —
-  if they reoffend, staff can see they were on probation and respond more
-  strictly.
-- **Solitary** is a harsher state on top of an existing jail sentence:
-  messages are blocked even in the jail cell, and time is added.
-- **Autojail** watches for rapid message spam and a banned-word list in
-  real time and jails automatically once a violation threshold is crossed,
-  the same way an automated system would flag repeated infractions.
-- **Trusted moderators / exemptions** mirror a real permissions model:
-  anyone with Manage Roles, Moderate Members, or Administrator can use jail
-  commands by default; `/jailperms trusted add` extends that to specific
-  people without changing their Discord permissions, and
-  `/jailperms exempt add` protects specific roles or users from ever being
-  jailed (e.g. bots, senior staff).
+  case, staff review it, and a decision (Approve/Deny) is recorded and
+  DMed to them.
+- **AutoJail** watches message rate in real time and jails automatically
+  once a member crosses the configured threshold within the configured
+  window, the same way an automated system would flag a burst of
+  activity.
+- **Cellmate** gives a second member standing access to someone's cell
+  (until removed or the case closes); **cell visit** is the temporary,
+  self-expiring version of the same idea.
+- **Diagnostics** (`/jaildiagnose`) checks that the configured role,
+  category, and log channel still exist, that the bot has the
+  permissions it needs, and that active cases aren't pointing at members
+  who've left or cell channels that no longer exist.
 
 ## Setup — GitHub
 
@@ -92,7 +86,7 @@ Configuration, Permissions, Logging, and Situational Commands.
    ```bash
    git init
    git add .
-   git commit -m "Initial commit: jail system bot"
+   git commit -m "Initial commit: Warden"
    git branch -M main
    git remote add origin https://github.com/<your-username>/<your-repo>.git
    git push -u origin main
@@ -106,9 +100,9 @@ Configuration, Permissions, Logging, and Situational Commands.
    application (or use an existing one).
 2. Under **Bot**, click **Reset Token** and copy it — this is your
    `DISCORD_TOKEN`.
-3. Under **Bot**, enable these **Privileged Gateway Intents**:
-   - Server Members Intent
-   - Message Content Intent
+3. Under **Bot**, enable the **Server Members Intent** (privileged gateway
+   intent) — it's used to look up members by name in `/jailsearch` and to
+   resolve members elsewhere.
 4. Under **OAuth2 → URL Generator**, select the `bot` and
    `applications.commands` scopes, and at minimum these bot permissions:
    Manage Roles, Manage Channels, Send Messages, Embed Links, Manage
@@ -136,11 +130,12 @@ Configuration, Permissions, Logging, and Situational Commands.
 
 ### Persisting data between deploys
 
-This bot stores everything in a local SQLite file (`jail.db`). Railway's
+This bot stores everything in a local SQLite file (`warden.db`). Railway's
 filesystem is ephemeral on redeploy by default. If you want jail history,
-cases, and configuration to survive redeploys, add a **Volume** to the
-service in Railway (Service → Settings → Volumes) mounted at the project
-directory, or point `DB_PATH` in `config.py` at a path inside that volume.
+cases, warnings, reports, and configuration to survive redeploys, add a
+**Volume** to the service in Railway (Service → Settings → Volumes), then
+set the `DB_PATH` variable to a path inside that volume (e.g.
+`/data/warden.db`).
 
 ## Local development
 
@@ -148,7 +143,7 @@ directory, or point `DB_PATH` in `config.py` at a path inside that volume.
 python -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env       # then fill in DISCORD_TOKEN (and optionally DEV_GUILD_ID)
+cp env.example .env        # then fill in DISCORD_TOKEN (and optionally DEV_GUILD_ID)
 python bot.py
 ```
 
@@ -156,8 +151,6 @@ python bot.py
 
 1. Invite the bot with the OAuth2 URL from the Developer Portal steps
    above.
-2. Run `/jailsetup` (Administrator only) to create the jail role, category,
-   jail-cell channel, log channel, and appeal channel automatically.
-3. Run `/jailperms trusted add` to give specific moderators access without
-   changing their Discord role permissions, if needed.
-4. Run `/help` to browse every command by category.
+2. Run `/jailsetup` (Administrator only) to create the jail role,
+   category, and log channel automatically.
+3. Run `/help` to browse every command by category.
