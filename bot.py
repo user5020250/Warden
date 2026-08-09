@@ -30,7 +30,6 @@ COGS = [
     "cogs.warn",
     "cogs.report",
     "cogs.appeal",
-    "cogs.autojail",
     "cogs.cellmate",
     "cogs.cell",
     "cogs.diagnostics",
