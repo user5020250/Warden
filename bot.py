@@ -34,6 +34,7 @@ COGS = [
     "cogs.logs",
     "cogs.extras",
     "cogs.scheduler",
+    "cogs.events",
     "cogs.help",
 ]
 
