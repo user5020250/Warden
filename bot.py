@@ -1,11 +1,10 @@
 """
-Jail System Discord Bot
+Warden — Discord Moderation Bot
 Entry point: loads configuration, connects to the database, loads every
 cog, and starts the bot.
 """
 
 import os
-import asyncio
 import logging
 
 import discord
@@ -17,29 +16,31 @@ from database import init_db, close_db
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
-logger = logging.getLogger("jailbot")
+logger = logging.getLogger("warden")
 
 INTENTS = discord.Intents.default()
 INTENTS.members = True
 
 COGS = [
     "cogs.setup",
-    "cogs.jail_basic",
-    "cogs.sentence",
-    "cogs.appeals",
-    "cogs.cell",
-    "cogs.mod_utils",
     "cogs.configuration",
-    "cogs.permissions_cog",
-    "cogs.logs",
-    "cogs.extras",
+    "cogs.jail",
+    "cogs.sentence",
+    "cogs.case",
+    "cogs.warn",
+    "cogs.report",
+    "cogs.appeal",
+    "cogs.autojail",
+    "cogs.cellmate",
+    "cogs.cell",
+    "cogs.diagnostics",
     "cogs.scheduler",
     "cogs.events",
     "cogs.help",
 ]
 
 
-class JailBot(commands.Bot):
+class WardenBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=INTENTS, help_command=None)
 
@@ -67,7 +68,7 @@ class JailBot(commands.Bot):
         await super().close()
 
 
-bot = JailBot()
+bot = WardenBot()
 
 
 @bot.event
@@ -102,7 +103,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: discord.
 def main():
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        raise RuntimeError("DISCORD_TOKEN is not set. Copy .env.example to .env and fill it in.")
+        raise RuntimeError("DISCORD_TOKEN is not set. Copy env.example to .env and fill it in.")
     bot.run(token)
 
 
