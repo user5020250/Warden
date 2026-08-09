@@ -2,7 +2,7 @@
 Shared notification helper.
 
 Every action in the bot that is supposed to (a) DM the affected member,
-(b) record itself in the action log, and/or (c) post a summary to the
+(b) record itself in the audit log, and/or (c) post a summary to the
 guild's configured log channel goes through this one function so the
 three stay in sync — nothing gets DM'd without being logged, and nothing
 gets logged without being available in the log channel.
@@ -31,8 +31,8 @@ async def notify_and_log(
     cfg=None,
 ) -> None:
     """
-    Records `action` in the database action log, then (respecting the
-    guild's configuration) DMs `dm_target` and posts to the log channel.
+    Records `action` in the audit log, then (respecting whether a log
+    channel is configured) DMs `dm_target` and posts to the log channel.
     Both notification steps are best-effort: a closed DM or a missing/
     inaccessible log channel is silently skipped, the action is still
     recorded either way.
@@ -43,7 +43,7 @@ async def notify_and_log(
     await log_action(guild.id, action, user_id=user_id, moderator_id=moderator_id,
                       case_id=case_id, detail=detail)
 
-    if dm_target is not None and dm_title and cfg["dm_notifications"]:
+    if dm_target is not None and dm_title:
         try:
             await dm_target.send(embed=build_embed(dm_title, dm_description, dm_fields))
         except discord.Forbidden:
