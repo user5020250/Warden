@@ -1,6 +1,7 @@
 """
 Shared embed builder. Every embed in the bot goes through this so the
-styling (black, no emojis, consistent footer) stays uniform.
+styling (black, no emojis, bold field names, consistent footer and
+timestamp) stays uniform across every command.
 """
 
 import discord
@@ -28,7 +29,7 @@ def build_embed(
     )
     if fields:
         for name, value, inline in fields:
-            embed.add_field(name=name, value=value, inline=inline)
+            embed.add_field(name=f"**{name}**", value=value, inline=inline)
     if footer:
         embed.set_footer(text=footer)
     return embed
@@ -40,6 +41,11 @@ def error_embed(message: str) -> discord.Embed:
 
 def success_embed(title: str, description: str = None, fields=None) -> discord.Embed:
     return build_embed(title, description, fields)
+
+
+def code(value) -> str:
+    """Wraps a value in backticks for consistent inline formatting."""
+    return f"`{value}`"
 
 
 def format_duration(seconds: int | None) -> str:
