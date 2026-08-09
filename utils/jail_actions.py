@@ -1,16 +1,23 @@
-"""
-Core jailing / releasing logic, shared by every cog that needs to put
-someone in jail or let them out (basic jail, autojail, solitary, probation,
-appeal approval, etc). Keeping this in one place means every entry point
-behaves the same real-world way: strip roles, apply the jail role, log a
-case, notify the user, and post to the log channel.
-"""
-
 import discord
 
 from database import db, now, get_guild_config, next_case_number
 from utils.embeds import build_embed, format_duration
 from utils.notify import notify_and_log
+
+_expected_role_removals: set[tuple[int, int]] = set()
+
+
+def expect_role_removal(guild_id: int, user_id: int) -> None:
+    _expected_role_removals.add((guild_id, user_id))
+
+
+def consume_expected_role_removal(guild_id: int, user_id: int) -> bool:
+    """Returns True (and clears the flag) if this removal was expected."""
+    key = (guild_id, user_id)
+    if key in _expected_role_removals:
+        _expected_role_removals.discard(key)
+        return True
+    return False
 
 
 async def open_case(guild_id, case_id, user_id, moderator_id, reason, duration_seconds, role_backup_ids, cell_channel_id=None):
@@ -51,6 +58,42 @@ async def _create_cell_channel(
     except discord.Forbidden:
         return None
     return channel
+
+
+async def restore_or_create_cell_channel(
+    guild: discord.Guild, cfg, jail_role: discord.Role | None, member: discord.Member, case,
+) -> discord.TextChannel | None:
+    """
+    Used when re-establishing a jailed member's cell — e.g. after they
+    rejoin the server. Reuses the case's existing cell channel if it's
+    still there (just restores the member's view access to it, since
+    Discord drops per-member overwrites when they leave), otherwise
+    creates a fresh one numbered to match the case ID, same as /jail does.
+    """
+    existing = guild.get_channel(case["cell_channel_id"]) if case["cell_channel_id"] else None
+    if existing is not None:
+        try:
+            await existing.set_permissions(
+                member, view_channel=True, send_messages=True, read_message_history=True,
+                reason="Restoring cell access after rejoin",
+            )
+        except discord.Forbidden:
+            return existing
+        return existing
+
+    category = guild.get_channel(cfg["jail_category_id"]) if cfg["jail_category_id"] else None
+    if category is None:
+        return None
+    new_channel = await _create_cell_channel(
+        guild, category, jail_role, member, "Cell recreated after rejoin", case["case_id"]
+    )
+    if new_channel is not None:
+        await db().execute(
+            "UPDATE jail_cases SET cell_channel_id = ? WHERE guild_id = ? AND case_id = ? AND status = 'active'",
+            (new_channel.id, guild.id, case["case_id"]),
+        )
+        await db().commit()
+    return new_channel
 
 
 async def jail_member(
@@ -182,7 +225,12 @@ async def release_member(
     if member is not None:
         try:
             if jail_role and jail_role in member.roles:
-                await member.remove_roles(jail_role, reason=f"Released ({method}) by {moderator}")
+                expect_role_removal(guild.id, member.id)
+                try:
+                    await member.remove_roles(jail_role, reason=f"Released ({method}) by {moderator}")
+                except discord.Forbidden:
+                    consume_expected_role_removal(guild.id, member.id)  # removal didn't happen; clear the flag
+                    raise
             if cfg["auto_restore"] and case["role_backup"]:
                 ids = [int(x) for x in case["role_backup"].split(",") if x]
                 roles = [guild.get_role(i) for i in ids]
