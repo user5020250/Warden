@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from database import db
+from database import db, log_action
 from utils.embeds import build_embed, error_embed
 
 
@@ -20,6 +20,8 @@ class ExemptAddSelect(discord.ui.UserSelect):
             (interaction.guild.id, target.id),
         )
         await db().commit()
+        await log_action(interaction.guild.id, "exempt_user_added", user_id=target.id,
+                          moderator_id=interaction.user.id, detail=f"{target} exempted from jailing")
         await interaction.response.send_message(
             embed=build_embed("Exemption Added", f"{target.mention} can no longer be jailed."), ephemeral=True)
 
@@ -38,6 +40,8 @@ class ExemptRemoveSelect(discord.ui.UserSelect):
         if result.rowcount == 0:
             return await interaction.response.send_message(
                 embed=error_embed(f"{target.mention} was not exempt."), ephemeral=True)
+        await log_action(interaction.guild.id, "exempt_user_removed", user_id=target.id,
+                          moderator_id=interaction.user.id, detail=f"{target}'s exemption removed")
         await interaction.response.send_message(
             embed=build_embed("Exemption Removed", f"{target.mention} can be jailed again."), ephemeral=True)
 
@@ -53,6 +57,8 @@ class ExemptAddRoleSelect(discord.ui.RoleSelect):
             (interaction.guild.id, target.id),
         )
         await db().commit()
+        await log_action(interaction.guild.id, "exempt_role_added", moderator_id=interaction.user.id,
+                          detail=f"Role '{target.name}' ({target.id}) exempted from jailing")
         await interaction.response.send_message(
             embed=build_embed("Exemption Added", f"{target.mention} can no longer be jailed."), ephemeral=True)
 
@@ -71,6 +77,8 @@ class ExemptRemoveRoleSelect(discord.ui.RoleSelect):
         if result.rowcount == 0:
             return await interaction.response.send_message(
                 embed=error_embed(f"{target.mention} was not exempt."), ephemeral=True)
+        await log_action(interaction.guild.id, "exempt_role_removed", moderator_id=interaction.user.id,
+                          detail=f"Role '{target.name}' ({target.id})'s exemption removed")
         await interaction.response.send_message(
             embed=build_embed("Exemption Removed", f"{target.mention} can be jailed again."), ephemeral=True)
 
@@ -148,6 +156,8 @@ class TrustedAddSelect(discord.ui.UserSelect):
             (interaction.guild.id, target.id),
         )
         await db().commit()
+        await log_action(interaction.guild.id, "trusted_mod_added", user_id=target.id,
+                          moderator_id=interaction.user.id, detail=f"{target} granted jail command access")
         await interaction.response.send_message(
             embed=build_embed("Trusted Moderator Added", f"{target.mention} can now use jail commands."),
             ephemeral=True)
@@ -167,6 +177,8 @@ class TrustedRemoveSelect(discord.ui.UserSelect):
         if result.rowcount == 0:
             return await interaction.response.send_message(
                 embed=error_embed(f"{target.mention} was not a trusted moderator."), ephemeral=True)
+        await log_action(interaction.guild.id, "trusted_mod_removed", user_id=target.id,
+                          moderator_id=interaction.user.id, detail=f"{target}'s jail command access revoked")
         await interaction.response.send_message(
             embed=build_embed("Trusted Moderator Removed", f"{target.mention} no longer has jail command access."),
             ephemeral=True)
