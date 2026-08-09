@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from database import db, now
+from database import db, now, add_visitation
 from utils.embeds import build_embed, error_embed, format_duration
 from utils.permissions import trusted_only
 from utils.jail_actions import release_member
@@ -45,6 +45,17 @@ class Extras(commands.Cog):
             (interaction.guild.id, channel.id),
         )
         occupant_case = await cur.fetchone()
+
+        await add_visitation(
+            guild_id=interaction.guild.id,
+            channel_id=channel.id,
+            visitor_id=member.id,
+            case_id=occupant_case["case_id"] if occupant_case else None,
+            occupant_id=occupant_case["user_id"] if occupant_case else None,
+            granted_by=interaction.user.id,
+            expires_at=now() + duration_seconds,
+        )
+
         if occupant_case is not None:
             occupant = interaction.guild.get_member(occupant_case["user_id"])
             await notify_and_log(
@@ -76,8 +87,8 @@ class Extras(commands.Cog):
         await interaction.followup.send(embed=build_embed(
             "Visitation Granted",
             f"{member.mention} may now access {channel.mention} for {format_duration(duration_seconds)}. "
-            "Remove access manually afterward, or reduce with /cell lock if needed. Note: that cell "
-            "is deleted automatically when the occupant is released, which also clears this access."
+            "Access is revoked automatically once that time is up. Note: that cell is also deleted "
+            "automatically when the occupant is released, which clears this access early."
         ))
 
 
