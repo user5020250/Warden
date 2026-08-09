@@ -162,6 +162,36 @@ async def init_db() -> None:
         );
         """
     )
+
+    # --- Migration: backfill columns on a guild_config table that already
+    # existed before these columns were added to the schema above.
+    #
+    # CREATE TABLE IF NOT EXISTS is a no-op if the table is already present,
+    # so on a database created by an older version of this bot, guild_config
+    # can be missing columns that the rest of the code (e.g. cogs/autojail.py)
+    # assumes exist. Reading a missing column off an aiosqlite.Row raises
+    # IndexError ("No item with that key"), not KeyError, which is what was
+    # happening here. We check what columns actually exist and add anything
+    # missing, so both fresh and pre-existing databases end up consistent.
+    cur = await _db.execute("PRAGMA table_info(guild_config)")
+    existing_columns = {row["name"] for row in await cur.fetchall()}
+
+    guild_config_columns = {
+        "jail_role_id": "INTEGER",
+        "jail_category_id": "INTEGER",
+        "log_channel_id": "INTEGER",
+        "default_seconds": f"INTEGER DEFAULT {DEFAULT_JAIL_SECONDS}",
+        "autojail_enabled": "INTEGER DEFAULT 0",
+        "autojail_threshold": f"INTEGER DEFAULT {DEFAULT_AUTOJAIL_THRESHOLD}",
+        "autojail_window_seconds": f"INTEGER DEFAULT {DEFAULT_AUTOJAIL_WINDOW_SECONDS}",
+        "autojail_duration_seconds": f"INTEGER DEFAULT {DEFAULT_AUTOJAIL_DURATION_SECONDS}",
+    }
+
+    for column, definition in guild_config_columns.items():
+        if column not in existing_columns:
+            logger.info("Migrating guild_config: adding missing column %s", column)
+            await _db.execute(f"ALTER TABLE guild_config ADD COLUMN {column} {definition}")
+
     await _db.commit()
 
 
