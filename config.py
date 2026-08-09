@@ -1,7 +1,6 @@
 """
 Global configuration constants for the Warden moderation bot.
 """
-
 import os
 
 # ---------------------------------------------------------------------------
@@ -27,11 +26,6 @@ SENTENCE_CHECK_INTERVAL = 30
 
 # How often (seconds) the background task checks for expired cell visitations.
 VISITATION_CHECK_INTERVAL = 60
-
-# AutoJail defaults, used the first time a guild enables it.
-DEFAULT_AUTOJAIL_THRESHOLD = 5
-DEFAULT_AUTOJAIL_WINDOW_SECONDS = 60
-DEFAULT_AUTOJAIL_DURATION_SECONDS = 1800
 
 # Rows per page for paginated listings (/jailstatus, /reports, /warnings
 # list, /appeals, /jailhistory, /jailsearch, /jaillogs).
