@@ -1,15 +1,3 @@
-"""
-Async SQLite persistence layer for the Jail System bot.
-
-Everything the bot needs to remember lives here: guild configuration,
-jail cases, sentence timers, appeals, warnings, autojail rules,
-trusted/exempt lists, and probation monitoring.
-
-Using SQLite (a single file, jail.db) means the bot's state survives
-restarts and redeploys on Railway as long as a persistent volume /
-the working directory is preserved between deploys of the same service.
-"""
-
 import os
 import time
 import logging
@@ -135,6 +123,19 @@ async def init_db() -> None:
             PRIMARY KEY (guild_id, entity_id, list_type)
         );
 
+        CREATE TABLE IF NOT EXISTS cell_visitations (
+            visitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            visitor_id INTEGER NOT NULL,
+            case_id INTEGER,
+            occupant_id INTEGER,
+            granted_by INTEGER,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            status TEXT DEFAULT 'active'       -- active, expired, revoked (channel gone)
+        );
+
         CREATE TABLE IF NOT EXISTS action_logs (
             log_id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER NOT NULL,
@@ -225,5 +226,56 @@ async def log_action(guild_id, action, user_id=None, moderator_id=None, case_id=
         "INSERT INTO action_logs (guild_id, case_id, user_id, moderator_id, action, detail, created_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (guild_id, case_id, user_id, moderator_id, action, detail, now()),
+    )
+    await db().commit()
+
+
+async def get_active_case(guild_id: int, user_id: int) -> aiosqlite.Row | None:
+    """The user's current active case in this guild, if any."""
+    cur = await db().execute(
+        "SELECT * FROM jail_cases WHERE guild_id = ? AND user_id = ? AND status = 'active'"
+        " ORDER BY created_at DESC LIMIT 1",
+        (guild_id, user_id),
+    )
+    return await cur.fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Cell visitation helpers (used for auto-revoke of temporary cell access)
+# ---------------------------------------------------------------------------
+async def add_visitation(guild_id, channel_id, visitor_id, case_id, occupant_id, granted_by, expires_at) -> int:
+    cur = await db().execute(
+        "INSERT INTO cell_visitations (guild_id, channel_id, visitor_id, case_id, occupant_id, granted_by,"
+        " created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (guild_id, channel_id, visitor_id, case_id, occupant_id, granted_by, now(), expires_at),
+    )
+    await db().commit()
+    return cur.lastrowid
+
+
+async def get_expired_visitations() -> list[aiosqlite.Row]:
+    cur = await db().execute(
+        "SELECT * FROM cell_visitations WHERE status = 'active' AND expires_at <= ?", (now(),)
+    )
+    return await cur.fetchall()
+
+
+async def close_visitation(visitation_id: int, status: str = "expired") -> None:
+    await db().execute(
+        "UPDATE cell_visitations SET status = ? WHERE visitation_id = ?", (status, visitation_id)
+    )
+    await db().commit()
+
+
+async def clear_dead_cell_channel(guild_id: int, channel_id: int) -> None:
+    """Called when a cell channel is deleted directly in Discord (not via /release),
+    so the case row doesn't keep pointing at a channel that no longer exists."""
+    await db().execute(
+        "UPDATE jail_cases SET cell_channel_id = NULL WHERE guild_id = ? AND cell_channel_id = ? AND status = 'active'",
+        (guild_id, channel_id),
+    )
+    await db().execute(
+        "UPDATE cell_visitations SET status = 'revoked' WHERE guild_id = ? AND channel_id = ? AND status = 'active'",
+        (guild_id, channel_id),
     )
     await db().commit()
