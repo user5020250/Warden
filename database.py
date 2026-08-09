@@ -3,8 +3,7 @@ import time
 import logging
 import aiosqlite
 
-from config import DB_PATH, DEFAULT_JAIL_SECONDS, DEFAULT_AUTOJAIL_THRESHOLD, \
-    DEFAULT_AUTOJAIL_WINDOW_SECONDS, DEFAULT_AUTOJAIL_DURATION_SECONDS
+from config import DB_PATH, DEFAULT_JAIL_SECONDS
 
 logger = logging.getLogger("warden")
 
@@ -37,11 +36,7 @@ async def init_db() -> None:
             jail_role_id INTEGER,
             jail_category_id INTEGER,
             log_channel_id INTEGER,
-            default_seconds INTEGER DEFAULT {DEFAULT_JAIL_SECONDS},
-            autojail_enabled INTEGER DEFAULT 0,
-            autojail_threshold INTEGER DEFAULT {DEFAULT_AUTOJAIL_THRESHOLD},
-            autojail_window_seconds INTEGER DEFAULT {DEFAULT_AUTOJAIL_WINDOW_SECONDS},
-            autojail_duration_seconds INTEGER DEFAULT {DEFAULT_AUTOJAIL_DURATION_SECONDS}
+            default_seconds INTEGER DEFAULT {DEFAULT_JAIL_SECONDS}
         );
 
         CREATE TABLE IF NOT EXISTS jail_cases (
@@ -122,12 +117,6 @@ async def init_db() -> None:
             decision_reason TEXT
         );
 
-        CREATE TABLE IF NOT EXISTS autojail_whitelist (
-            guild_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            PRIMARY KEY (guild_id, user_id)
-        );
-
         CREATE TABLE IF NOT EXISTS cellmates (
             guild_id INTEGER NOT NULL,
             case_id INTEGER NOT NULL,
@@ -162,36 +151,27 @@ async def init_db() -> None:
         );
         """
     )
+    await _db.commit()
 
-    # --- Migration: backfill columns on a guild_config table that already
-    # existed before these columns were added to the schema above.
-    #
-    # CREATE TABLE IF NOT EXISTS is a no-op if the table is already present,
-    # so on a database created by an older version of this bot, guild_config
-    # can be missing columns that the rest of the code (e.g. cogs/autojail.py)
-    # assumes exist. Reading a missing column off an aiosqlite.Row raises
-    # IndexError ("No item with that key"), not KeyError, which is what was
-    # happening here. We check what columns actually exist and add anything
-    # missing, so both fresh and pre-existing databases end up consistent.
+    # --- Cleanup: drop AutoJail's columns/table from databases created by
+    # an older version of this bot that still have them. New installs never
+    # create these (they're gone from the schema above), so this only does
+    # anything on a pre-existing database that had AutoJail enabled before
+    # it was removed. Requires SQLite 3.35+ for DROP COLUMN, which ships
+    # with modern Python's bundled sqlite3/aiosqlite.
     cur = await _db.execute("PRAGMA table_info(guild_config)")
     existing_columns = {row["name"] for row in await cur.fetchall()}
-
-    guild_config_columns = {
-        "jail_role_id": "INTEGER",
-        "jail_category_id": "INTEGER",
-        "log_channel_id": "INTEGER",
-        "default_seconds": f"INTEGER DEFAULT {DEFAULT_JAIL_SECONDS}",
-        "autojail_enabled": "INTEGER DEFAULT 0",
-        "autojail_threshold": f"INTEGER DEFAULT {DEFAULT_AUTOJAIL_THRESHOLD}",
-        "autojail_window_seconds": f"INTEGER DEFAULT {DEFAULT_AUTOJAIL_WINDOW_SECONDS}",
-        "autojail_duration_seconds": f"INTEGER DEFAULT {DEFAULT_AUTOJAIL_DURATION_SECONDS}",
+    autojail_columns = {
+        "autojail_enabled",
+        "autojail_threshold",
+        "autojail_window_seconds",
+        "autojail_duration_seconds",
     }
+    for column in autojail_columns & existing_columns:
+        logger.info("Removing unused column guild_config.%s", column)
+        await _db.execute(f"ALTER TABLE guild_config DROP COLUMN {column}")
 
-    for column, definition in guild_config_columns.items():
-        if column not in existing_columns:
-            logger.info("Migrating guild_config: adding missing column %s", column)
-            await _db.execute(f"ALTER TABLE guild_config ADD COLUMN {column} {definition}")
-
+    await _db.execute("DROP TABLE IF EXISTS autojail_whitelist")
     await _db.commit()
 
 
