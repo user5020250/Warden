@@ -1,3 +1,0 @@
-const {SlashCommandBuilder}=require('discord.js');const {errorEmbed,infoEmbed,successEmbed,warningEmbed}=require('../embeds');const {db,now}=require('../db');const {requireStaff}=require('../utils');
-const data=new SlashCommandBuilder().setName('reports').setDescription('Displays pending and recent reports.');
-module.exports={data,async execute(i){if(!(await requireStaff(i)))return;const rows=db.prepare('SELECT * FROM reports WHERE guild_id=? ORDER BY created_at DESC LIMIT 20').all(String(i.guild.id));return i.reply({embeds:[warningEmbed('REPORTS',rows.length?rows.map(r=>`**#${r.report_id}**  ${r.status.toUpperCase()}  •  <@${r.reported_id}>\n${r.reason}`).join('\n\n'):'There are no reports on record.')]})}};
