@@ -174,6 +174,29 @@ async def init_db() -> None:
     await _db.execute("DROP TABLE IF EXISTS autojail_whitelist")
     await _db.commit()
 
+    # --- Migration: add columns to `appeals` that were introduced after
+    # some databases already had the table created. `CREATE TABLE IF NOT
+    # EXISTS` above only creates the table when it's missing entirely — it
+    # never adds columns to a table that already exists, so a pre-existing
+    # `appeals` table from before these columns existed would otherwise be
+    # stuck without them forever (e.g. "table appeals has no column named
+    # reason"). New installs already get these from the CREATE TABLE above,
+    # so this only does anything on an older, already-persisted database.
+    cur = await _db.execute("PRAGMA table_info(appeals)")
+    existing_appeals_columns = {row["name"] for row in await cur.fetchall()}
+    appeals_columns = {
+        "reason": "TEXT NOT NULL DEFAULT ''",
+        "decided_by": "INTEGER",
+        "decided_at": "INTEGER",
+        "decision_reason": "TEXT",
+    }
+    for column, declaration in appeals_columns.items():
+        if column not in existing_appeals_columns:
+            logger.info("Adding missing column appeals.%s", column)
+            await _db.execute(f"ALTER TABLE appeals ADD COLUMN {column} {declaration}")
+
+    await _db.commit()
+
 
 def db() -> aiosqlite.Connection:
     if _db is None:
